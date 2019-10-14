@@ -80,3 +80,9 @@ WantedBy=multi-user.target
 `systemctl start beampay.service`
 
 **Done! Manual created by** [@vsnation](https://t.me/vsnation)
+
+### Donate Address
+**Beam**: 203ae2ac20c67c67e035e580284c472156356e783c33af4c74a87ab84169d433b01
+![Donate address](https://i.imgur.com/RJVr05X.png)
+
+**BTC**: 3QVqpztjTXrfDCDaQiaVanHyjW6yGsWTRd
