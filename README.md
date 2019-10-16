@@ -1,4 +1,6 @@
-# BeamPay | Manual for deploy
+# BeamPay | Manual to deploy
+
+**Buy Cloud server for 3€ on https://www.hetzner.com/cloud**
 
 ## Mongodb Installation Guide
 **Ubuntu:** https://docs.mongodb.com/manual/tutorial/install-mongodb-on-ubuntu/
