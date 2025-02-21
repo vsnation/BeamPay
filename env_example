@@ -1,2 +1,0 @@
-DATABASE_URL="mongodb://localhost:27017/beampay_test"
-BEAM_API_RPC="http://127.0.0.1:10000/api/wallet"
