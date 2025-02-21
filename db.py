@@ -21,11 +21,11 @@ def update_indexes():
     db.txs.create_index([("status", 1)])  # Index for transaction status
     db.txs.create_index([("confirmations", 1)])  # Index for confirmations
     db.txs.create_index([("asset_id", 1)])  # Index for asset_id
+    db.txs.create_index([("sender", 1)])
+    db.txs.create_index([("receiver", 1)])
 
     # Index for addresses
     db.addresses.create_index([("_id", 1)], unique=True)  # Ensure address ID is unique
-    db.addresses.create_index([("own_id", 1)])  # Index for own_id
-    db.addresses.create_index([("wallet_id", 1)])  # Index for wallet_id
 
     print("Indexes created successfully")
     return True

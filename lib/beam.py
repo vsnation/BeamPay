@@ -34,11 +34,14 @@ class BEAMWalletAPI:
             result = response.json()
             if 'error' in result:
                 raise Exception(f"Error {result['error']['code']}: {result['error']['message']}")
-            return result.get('result')
+            if "result" in result:
+                return result.get('result')
+            elif "assets" in result:
+                return result['assets']
         except requests.exceptions.RequestException as e:
             raise Exception(f"HTTP Request failed: {e}")
 
-    def create_address(self, label=None, expiration='never', use_default_signature=False):
+    def create_address(self, label=None, wallet_type="regular", expiration='never', use_default_signature=False):
         """
         Create a new payment address.
 
@@ -47,11 +50,17 @@ class BEAMWalletAPI:
         :param use_default_signature: If True, the address will use the default wallet signature (new in API v7.3).
         :return: The newly created address.
         """
-        params = {
-            'comment': label,
-            'expiration': expiration,
-            'use_default_signature': use_default_signature
-        }
+        params = {}
+        if wallet_type:
+            params.update({"type": wallet_type})
+        if label:
+            params.update({"comment": label})
+        if expiration:
+            params.update({"expiration": expiration})
+
+        if use_default_signature:
+            params.update({"use_default_signature": use_default_signature})
+
         return self._post('create_address', params)
 
     def wallet_status(self):
@@ -160,7 +169,7 @@ class BEAMWalletAPI:
         params = {'address': address}
         return self._post('validate_address', params)
 
-    def tx_send(self, value, fee, receiver, comment=None, asset_id=0, offline=False):
+    def tx_send(self, value, fee, sender, receiver, comment=None, asset_id=0, offline=False):
         """
         Send BEAM or assets to a given address.
 
@@ -173,13 +182,18 @@ class BEAMWalletAPI:
         :return: Transaction ID of the sent transaction.
         """
         params = {
-            'value': value,
-            'fee': fee,
-            'address': receiver,
-            'comment': comment,
-            'asset_id': asset_id,
-            'offline': offline
+            "value": value,
+            "address": receiver,
+            "asset_id": asset_id,
+            "fee": fee
         }
+        if comment:
+            params["comment"] = comment
+        if sender:
+            params["from"] = sender
+        if offline:
+            params["offline"] = offline
+
         return self._post('tx_send', params)
 
     def get_asset_info(self, asset_id):
@@ -207,11 +221,12 @@ class BEAMWalletAPI:
         Get the list of transactions.
         """
         params = {
-            'filter': filter,
-            'count': count,
-            'skip': skip,
-            'rates': rates
+            "count": count,
+            "skip": skip
         }
+        if filter:
+            params["filter"] = filter
+
         return self._post('tx_list', params)
 
     def get_utxo(self, count=0, skip=0, sort_field="amount", sort_direction="asc"):
@@ -244,8 +259,9 @@ class BEAMWalletAPI:
         """
         params = {
             'refresh': refresh,
-            'height': height
         }
+        if height:
+            params.update({"height": height})
         return self._post('assets_list', params)
 
     def assets_swap_offers_list(self):
@@ -269,13 +285,14 @@ class BEAMWalletAPI:
         :return: Details of the created asset swap offer.
         """
         params = {
-            'send_amount': send_amount,
-            'send_asset_id': send_asset_id,
-            'receive_amount': receive_amount,
-            'receive_asset_id': receive_asset_id,
-            'minutes_before_expire': minutes_before_expire,
-            'comment': comment
+            "send_amount": send_amount,
+            "send_asset_id": send_asset_id,
+            "receive_amount": receive_amount,
+            "receive_asset_id": receive_asset_id,
+            "minutes_before_expire": minutes_before_expire
         }
+        if comment:
+            params["comment"] = comment
         return self._post('assets_swap_create', params)
 
     def assets_swap_accept(self, offer_id):
