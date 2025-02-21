@@ -122,13 +122,10 @@ async def withdraw(
         "success": False,
     })
 
-    # 🔔 Send Telegram Notification
-    await send_to_logs(f"📤 *Withdrawal Initiated*\n💸 *Amount:* `{amount}` `{asset_id}`\n🔗 *From:* `{from_address}`\n🔗 *To:* `{to_address}`\n🆔 *TxID:* `{tx_id}`", parse_mode="Markdown")
-
     return {"txId": tx_id, "status": "pending"}
 
 
-@app.get("/deposits")
+@app.get("/deposits", dependencies=[Depends(get_api_key)])
 async def get_deposits(address: str = Body(None), asset_ids: list[str] = Body(...)):
     """Fetch deposits for a given user or address (with optional asset filtering)."""
     query = {}
@@ -140,7 +137,7 @@ async def get_deposits(address: str = Body(None), asset_ids: list[str] = Body(..
     deposits = await db.txs.find(query).to_list(None)
     return [{"txId": d["_id"], "amount": d["value"], "asset_id": d["asset_id"], "status": d["status"]} for d in deposits]
 
-@app.get("/balances")
+@app.get("/balances", dependencies=[Depends(get_api_key)])
 async def get_balances(address: str):
     """Retrieve balance for a given address."""
     address_data = await db.addresses.find_one({"_id": address})
@@ -148,7 +145,7 @@ async def get_balances(address: str):
         raise HTTPException(status_code=404, detail="Address not found")
     return address_data["balance"]
 
-@app.get("/transactions")
+@app.get("/transactions", dependencies=[Depends(get_api_key)])
 async def get_transactions(address: str = Body(None), status: int = Body(None)):
     """Retrieve transactions (optionally filtered by address or status)."""
     query = {}
@@ -160,7 +157,7 @@ async def get_transactions(address: str = Body(None), status: int = Body(None)):
     transactions = await db.txs.find(query).to_list(None)
     return transactions
 
-@app.post("/register_webhook")
+@app.post("/register_webhook", dependencies=[Depends(get_api_key)])
 async def register_webhook(url: str = Body(...), event_type: str = Body(...), api_key: str = Depends(get_api_key)):
     """Register a webhook for deposits/withdrawals."""
     await db.webhooks.update_one(
