@@ -123,57 +123,6 @@ async def process_transactions():
             except Exception as exc:
                 traceback.print_exc()
 
-#async def handle_locked_balance(tx):
-#    """Lock funds for a pending or in-progress transaction."""
-#    receiver = tx["receiver"]
-#    sender = tx["sender"]
-#    asset_id = str(tx["asset_id"])  # Asset ID as string
-#    value = int(tx["value"])  # Convert value to integer
-#    fee = int(tx.get("fee", 0))  # Convert value to integer
-#    status = tx.get('status', "None")
-#
-#    if receiver:
-#        # Lock funds in the receiver's address
-#        await update_balance(receiver, asset_id, locked_delta=value)
-#        print(f"{receiver} Received {value} aid: {asset_id} Status {status}")
-#    if sender:
-#        # If you're a service you should lock the funds of the sender by decreasing "available" balance to "locked" balance.
-#        # await update_balance(sender, asset_id, available_delta=((value + fee) * -1), locked_delta=value)
-#        print(f"{sender} Sent {value} aid: {asset_id} {status}")
-#
-#
-#async def handle_failed_transaction(tx):
-#    """Remove locked funds for canceled or failed transactions."""
-#    sender = tx["sender"]
-#    asset_id = str(tx["asset_id"])  # Asset ID as string
-#    value = int(tx["value"])  # Convert value to integer
-#    fee = int(tx.get("fee", 0))  # Convert value to integer
-#    status = tx.get('status', "None")
-#
-#    if sender:
-#        # Unlock funds for the sender
-#        await update_balance(sender, asset_id, locked_delta=value * -1, available_delta=(value + fee))
-#        print(f"Sent {value} aid: {asset_id} status {status}")
-#
-#
-#async def handle_finalized_transaction(tx):
-#    """Move locked funds to available for finalized transactions."""
-#    receiver = tx["receiver"]
-#    sender = tx["sender"]
-#    asset_id = str(tx["asset_id"])  # Asset ID as string
-#    value = int(tx["value"])  # Convert value to integer
-#
-#    if receiver:
-#        # Move funds to the receiver's available balance
-#        print(f"{receiver} Received {value} aid: {asset_id} | Confirmed")
-#        await update_balance(receiver, asset_id, available_delta=value, locked_delta=value * -1)
-#
-#    if sender:
-#        # Deduct funds from the sender's available balance
-#        print(f"{sender} Sent {value} aid: {asset_id} | Confirmed")
-#        await update_balance(sender, asset_id, locked_delta=value * -1)
-
-
 async def handle_locked_balance(tx):
     """Lock funds in receiver’s wallet and pending in sender’s wallet."""
     receiver = tx["receiver"]
@@ -186,9 +135,11 @@ async def handle_locked_balance(tx):
     receiver_exists = await db.addresses.find_one({"_id": receiver})
 
     if sender_exists:
-        # Outgoing or Internal Transfer: Deduct available, lock value+fee
-        print(f"Should be Locked {value + fee} for Sender in API")
-        await update_balance(sender, asset_id, available_delta=-(value + fee), locked_delta=(value + fee))
+        # Deduct from sender's available balance
+        await update_balance(sender, asset_id, available_delta=-value, locked_delta=value)
+        # Deduct BEAM fee from available balance
+        await update_balance(sender, "0", available_delta=-fee, locked_delta=fee)
+        print(f"Locked {value} of Asset {asset_id} & {fee} BEAM from {sender}.")
 
     if receiver_exists:
         # Incoming Transfer: Lock amount for pending deposit
@@ -226,7 +177,9 @@ async def handle_finalized_transaction(tx):
     if sender_exists:
         # Outgoing or Internal Transfer: Unlock funds (deduct permanently)
         print(f"Finalised. Released Locked -{value + fee} for Sender")
-        await update_balance(sender, asset_id, locked_delta=-(value + fee))
+        # Deduct locked funds and fee from sender
+        await update_balance(sender, asset_id, locked_delta=-value)
+        await update_balance(sender, "0", locked_delta=-fee)  # Deduct BEAM fee
         if not is_notified:
             await send_to_logs(
                 f"✅ *Withdrawal Confirmed*\n💸 *Amount:* `{value_formatted} {asset_name}`\n📤 *From:* `{sender}`\n🆔 *Kernel:* `{kernel}`",
@@ -253,9 +206,9 @@ async def handle_failed_transaction(tx):
     sender_exists = await db.addresses.find_one({"_id": sender})
 
     if sender_exists:
-        # Refund the failed transaction: Move back to available
-        await update_balance(sender, asset_id, available_delta=(value + fee), locked_delta=-(value + fee))
-
+        # Refund locked funds and BEAM fee back to sender
+        await update_balance(sender, asset_id, available_delta=value, locked_delta=-value)
+        await update_balance(sender, "0", available_delta=fee, locked_delta=-fee)  # Refund BEAM fee
 
 
 async def update_balance(address, asset_id, available_delta=0, locked_delta=0):
