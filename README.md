@@ -1,151 +1,355 @@
-# BeamPay | Manual to deploy
+# 🚀 BeamPay - Simplified Payments for Users & Businesses
 
-**Buy Cloud server for 3€ on https://www.hetzner.com/cloud**
+BeamPay is a self-hosted payment gateway for seamless **Beam blockchain** transactions. It provides:
+- **Automated balance tracking** by scanning the blockchain.
+- **Secure API** for merchant integrations.
+- **Webhook notifications** for deposits & withdrawals.
+- **Telegram monitoring** (if enabled).
+- **Admin Dashboard** for transaction tracking.
+- **Auto-recovery of services** using systems.
 
-## Mongodb Installation Guide
-**Ubuntu:** https://docs.mongodb.com/manual/tutorial/install-mongodb-on-ubuntu/
-
-`wget -qO - https://www.mongodb.org/static/pgp/server-4.2.asc | sudo apt-key add -`
-
-`echo "deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu bionic/mongodb-org/4.2 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-4.2.list`
-
-`sudo apt-get update`
-
-`sudo apt-get install -y mongodb-org`
-
-`sudo service mongod start`
-
-`sudo service mongod status`
-
-# Install Beam Node, Wallet, API
-
-**Create Directory**
-
-`mkdir beam-wallet`
-
-`cd beam-wallet`
-
-## Install Beam Node
-
-**Get last version of the beam-wallet** [here](https://github.com/BeamMW/beam/releases)
-
-`wget -c https://github.com/BeamMW/beam/releases/download/beam-3.1.5765/linux-beam-node-3.1.5765.tar.gz -O - | tar -xz`
-
-Add `--horizon_hi=1440` at the end of beam-node.cfg.
-
-Run the node 
-
-`./beam-node`
-
-## Install CLI Beam wallet
-
-**Get last version of the beam-wallet** [here](https://github.com/BeamMW/beam/releases)
-
-`wget -c https://github.com/BeamMW/beam/releases/download/beam-3.1.5765/linux-beam-wallet-cli-3.1.5765.tar.gz -O - | tar -xz`
-
-**To create wallet use:** `./beam-wallet init` Keep in safe seed
-
-**To restore wallet use:** `./beam-wallet restore --seed_phrase=<semicolon separated list of 12 seed phrase words>;`
-
-For more information read [here](https://documentation.beam.mw/en/latest/rtd_pages/user_backup_restore.html?highlight=restore)
-
-## Install Beam Wallet API
-
-**Get last version of the beam-wallet** [here](https://github.com/BeamMW/beam/releases)
-
-`wget -c https://github.com/BeamMW/beam/releases/download/beam-3.1.5765/linux-wallet-api-3.1.5765.tar.gz -O - | tar -xz`
-
-**Specify use_http=1 in the wallet-api.cfg**
-
-**To start wallet_api use:** `./wallet-api`
-
-For more information read [here](https://github.com/BeamMW/beam/wiki/Beam-wallet-protocol-API)
-
-## Install Python
-Please, install Python using the link below
-
-**Ubuntu:** https://www.digitalocean.com/community/tutorials/how-to-install-python-3-and-set-up-a-programming-environment-on-ubuntu-18-04-quickstart
-
-`sudo apt update`
-
-`sudo apt -y upgrade`
-
-`sudo apt install software-properties-common build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libssl-dev libreadline-dev libffi-dev wget python3-dev python3-setuptools`
-
-`sudo apt install -y python3-pip`
-
-`cd /root/BeamPay; pip3 install -r requirements.txt`
-
-## Create Init script
-
-`cd /etc/systemd/system`
-
-`nano beampay.service`
-
-**Insert text below into beampay.service file**.
-
+Project Structure
+```bash
+BeamPay/
+│── api.py               # FastAPI service for managing addresses, deposits, withdrawals
+│── process_payments.py   # Background job for tracking blockchain transactions
+│── lib/beam.py               # BEAM API Wrapper
+│── config.py             # Configuration settings (loads .env variables)
+│── db.py                 # MongoDB connection
+│── .env.example          # Example environment file
+│── requirements.txt      # Python dependencies
+│── README.md             # Project documentation
 ```
-[Unit]
-Description=beampay
-After=network.target
-After=mongodb.service
 
+🚀 Project Progress & TODO List
+
+✅ **Completed Tasks**
+-	✅ **Core Payment Processing** - Track transactions, update balances
+-	✅ **API Development** - Secure FastAPI for deposits, withdrawals
+-	✅ **Database Sync** - Sync addresses, transactions, and assets in MongoDB
+-	✅ **Webhook Integration** - Notify services of deposits & withdrawals
+-	✅ **Telegram Alerts** - Notify users & admins about transfers
+
+🔄 **In Progress**
+-	🚧 **Admin Dashboard** - Statistics & balance verification
+-	🚧 **Transaction History** - User-friendly logs & filters
+- 🚧 **Security Enhancements** - API Key Authentication & IP Whitelisting
+
+🛠️ Upcoming Features
+-	📝 **TBA**
+
+---
+
+## 🛠️ **Installation Guide**
+
+### **1️⃣ Install Dependencies**
+#### **🔹 Install MongoDB**
+```bash
+sudo apt update
+sudo apt install -y mongodb
+sudo systemctl enable mongod --now
+```
+> Check if MongoDB is running:
+```bash
+sudo systemctl status mongod
+```
+
+#### **🔹 Install Python & Virtual Environment**
+```bash
+sudo apt install -y python3 python3-pip python3-venv
+```
+> **Create a virtual environment & activate it**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+> **Install required Python packages**
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## 🔧 **Configuration**
+### **2️⃣ Setup Environment Variables**
+Copy the `.env.example` file and update the values:
+```bash
+cp .env.example .env
+nano .env
+```
+### **.env Configuration**
+```ini
+MONGO_URI=mongodb://localhost:27017/beampay
+BEAM_API_RPC=http://127.0.0.1:10000
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+WEBHOOK_URL=https://yourserver.com/webhook
+```
+
+---
+
+## 🚀 **Running BeamPay Services**
+### **3️⃣ Start API & Payment Processor**
+#### **Using Systemd (Recommended)**
+> **Create a systemd service for API**
+```bash
+sudo nano /etc/systemd/system/beampay-api.service
+```
+**Add the following:**
+```ini
+[Unit]
+Description=BeamPay API Service
+After=network.target
 
 [Service]
-Type=simple
-WorkingDirectory=/root/BeamPay
-ExecStart=/usr/bin/python3 beampay.py
-RestartSec=10
-SyslogIdentifier=beampay
-TimeoutStopSec=120
-TimeoutStartSec=2
-StartLimitInterval=120
-StartLimitBurst=5
-KillMode=mixed
-Restart=always
-PrivateTmp=true
-
+User=root
+WorkingDirectory=/path/to/BeamPay
+ExecStart=/path/to/BeamPay/venv/bin/uvicorn api:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 ```
+> **Create a systemd service for Payment Scanner**
+```bash
+sudo nano /etc/systemd/system/beampay-payments.service
+```
+**Add the following:**
+```ini
+[Unit]
+Description=BeamPay Payment Processor
+After=network.target
 
-`systemctl daemon-reload`
+[Service]
+User=root
+WorkingDirectory=/path/to/BeamPay
+ExecStart=/path/to/BeamPay/venv/bin/python process_payments.py
+Restart=on-failure
+RestartSec=5
 
-`systemctl enable beampay.service`
+[Install]
+WantedBy=multi-user.target
+```
+> **Enable & Start Services**
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable beampay-api
+sudo systemctl enable beampay-payments
+sudo systemctl start beampay-api
+sudo systemctl start beampay-payments
+```
 
-`systemctl start beampay.service`
+#### **Using Crontab (Alternative)**
+> Run `crontab -e` and add:
+```cron
+* * * * * pgrep -f "uvicorn api:app" > /dev/null || systemctl restart beampay-api
+* * * * * pgrep -f "process_payments.py" > /dev/null || systemctl restart beampay-payments
+```
 
-## Security
+---
 
-**We need to disable ssh connection using the password.**
+## 📡 **Using the API**
+> **Get deposit address**
+```bash
+curl -X POST http://127.0.0.1:8000/create_wallet
+```
+> **Withdraw funds**
+```bash
+curl -X POST http://127.0.0.1:8000/withdraw      -H "Content-Type: application/json"      -d '{"from_address": "your_wallet", "to_address": "recipient_wallet", "asset_id": "0", "amount": 1000000}'
+```
+> **Get balances**
+```bash
+curl -X GET http://127.0.0.1:8000/balances?address=your_wallet
+```
 
-**Open the terminal on your PC(only this PC will have access to the server) and enter below command to get your public key.** 
+---
 
-`cat .ssh/id_rsa.pub`
+## 📊 **Admin Dashboard**
+### **4️⃣ Access the Web UI**
+1. Open `http://127.0.0.1:8000/dashboard`
+2. Monitor **transactions, balances, and users.**
+3. Track mismatched balances between the blockchain & database.
 
-*Please, copy the result and paste it into the .ssh/authorized_keys on the server*
+---
 
-`nano .ssh/authorized_keys`
+## 📲 **Telegram Notifications**
+> **Enable Telegram monitoring in `.env`**
+```ini
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+```
+> **Monitored Events**
+✅ Deposit received  
+✅ Withdrawal request  
+✅ Internal transfers  
 
-Paste it using `Ctrl + V`
+---
 
-*Open a new tab in the PC terminal and check that you can connect to your server without asking the password*
+## 🎯 **Features**
+✔️ **Secure API authentication (API keys, IP whitelisting)**  
+✔️ **Webhook notifications for deposits/withdrawals**  
+✔️ **Automatic address & transaction syncing**  
+✔️ **Admin Panel to monitor balances**  
+✔️ **Auto-restarting services using systemd**  
 
-`ssh root@IP`
+---
 
-*If all is okay, you need to open sshd_config to disable password auth*
+## Server Security
 
-`sudo nano /etc/ssh/sshd_config`
+### **Disable SSH Password Authentication**
 
-Find string with the name "PasswordAuthentication Yes" and change it to No. **Make sure that only one note exists.** There are cases when one of the notes is commented using "#" and other located at the end of file
+For security reasons, it's recommended to disable SSH login using passwords and allow only key-based authentication.
 
-`PasswordAuthentication No`
+### **Step 1: Get Your Public Key**
 
-**Done! Manual created by** [@vsnation](https://t.me/vsnation)
+Run the following command on your **local PC** (the one that should have access to the server):
 
-### Donate Address
-**Beam**: 203ae2ac20c67c67e035e580284c472156356e783c33af4c74a87ab84169d433b01
-![Donate address](https://i.imgur.com/RJVr05X.png)
+```sh
+cat ~/.ssh/id_rsa.pub
+```
 
-**BTC**: 3QVqpztjTXrfDCDaQiaVanHyjW6yGsWTRd
+Copy the output, which is your public SSH key.
+
+### **Step 2: Add the Key to the Server**
+
+Log in to your server and open the `authorized_keys` file:
+
+```sh
+nano ~/.ssh/authorized_keys
+```
+
+Paste the copied public key into the file. Save and exit by pressing **CTRL + X**, then **Y**, and **ENTER**.
+
+### **Step 3: Verify SSH Key Login**
+
+Open a new terminal on your PC and try connecting to the server:
+
+```sh
+ssh root@YOUR_SERVER_IP
+```
+
+If you can connect without entering a password, the setup is correct.
+
+### **Step 4: Disable Password Authentication**
+
+Now, disable password authentication for SSH to enhance security.
+
+Open the SSH configuration file:
+
+```sh
+sudo nano /etc/ssh/sshd_config
+```
+
+Find the following line:
+
+```sh
+PasswordAuthentication Yes
+```
+
+Change it to:
+
+```sh
+PasswordAuthentication No
+```
+
+**Make sure there is only one occurrence of this setting in the file.** Sometimes, another entry might be commented (`#`) and a duplicate could exist later in the file.
+
+### **Step 5: Restart SSH Service**
+
+Apply the changes by restarting the SSH service:
+
+```sh
+sudo systemctl restart sshd
+```
+
+---
+
+# 🔧 Installation BEAM
+
+## Setup the Node, Wallet, and Wallet API
+
+### Create Directory
+```sh
+mkdir beam-wallet
+cd beam-wallet
+```
+
+## Install Beam Node
+
+**Get the latest version of Beam Node** [here](https://github.com/BeamMW/beam/releases)
+
+```sh
+wget -c https://github.com/BeamMW/beam/releases/download/latest/linux-beam-node.tar.gz -O - | tar -xz
+```
+
+- Add `horizon_hi=1440` at the end of `beam-node.cfg`.
+- Add `fast_sync=1` at the end of `beam-node.cfg`.
+- Add `peer=eu-nodes.mainnet.beam.mw:8100,us-nodes.mainnet.beam.mw:8100` at the end of `beam-node.cfg`.
+
+Run the node:
+
+```sh
+./beam-node
+```
+
+## Install CLI Beam Wallet
+
+**Get the latest version of Beam Wallet CLI** [here](https://github.com/BeamMW/beam/releases)
+
+```sh
+wget -c https://github.com/BeamMW/beam/releases/download/latest/linux-beam-wallet-cli.tar.gz -O - | tar -xz
+```
+
+**To create a wallet use:**
+```sh
+./beam-wallet init
+```
+💡 **Keep your seed phrase in a safe place!**
+
+**To restore a wallet use:**
+```sh
+./beam-wallet restore --seed_phrase="<semicolon-separated list of 12 seed phrase words>"
+```
+
+For more information, read [this guide](https://documentation.beam.mw/en/latest/rtd_pages/user_backup_restore.html?highlight=restore).
+
+## Install Beam Wallet API
+
+**Get the latest version of Beam Wallet API** [here](https://github.com/BeamMW/beam/releases)
+
+```sh
+wget -c https://github.com/BeamMW/beam/releases/download/latest/linux-wallet-api.tar.gz -O - | tar -xz
+```
+
+### Configuration:
+Edit `wallet-api.cfg` and add the following:
+```ini
+use_http=1
+```
+
+### Start Wallet API:
+```sh
+./wallet-api
+```
+
+For more information, read [the API documentation](https://github.com/BeamMW/beam/wiki/Beam-wallet-protocol-API).
+
+
+---
+
+## ⚡ **Contributing**
+1. Fork the repository.
+2. Make your changes.
+3. Submit a Pull Request (PR).
+
+---
+
+## 🔥 **Support & Community**
+📢 Join BEAM **Telegram Group**: `https://t.me/BeamPrivacy`  
+
+
+#### **BeamPay is created by** [@vsnation](https://t.me/vsnation)
+
+### **Donate Address**
+- **Beam**: `203ae2ac20c67c67e035e580284c472156356e783c33af4c74a87ab84169d433b01`
+- **BTC**: `3QVqpztjTXrfDCDaQiaVanHyjW6yGsWTRd`
+
