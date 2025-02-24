@@ -335,3 +335,47 @@ class BEAMWalletAPI:
         """
         params = {'hash': hash_}
         return self._post('ipfs_get', params)
+
+    def invoke_contract(self, contract=None, contract_file=None, args=None, create_tx=True, priority=0, unique=0):
+        """
+        Invoke a Beam smart contract.
+
+        :param contract: Raw contract code as a bytes array (optional).
+        :param contract_file: Contract file path (optional, ignored if `contract` is provided).
+        :param args: Arguments for the contract in string format (e.g., "role=manager,action=view").
+        :param create_tx: If True, automatically creates a transaction if the contract requires it.
+        :param priority: Priority level for contract execution queue (default is 0).
+        :param unique: Ensures a unique contract execution to prevent redundant processing.
+        :return: Contract output, transaction ID (if applicable), or raw contract execution data.
+        """
+        params = {}
+        if contract:
+            params["contract"] = contract
+        elif contract_file:
+            params["contract_file"] = contract_file
+        if args:
+            params["args"] = args
+        if create_tx is not None:
+            params["create_tx"] = create_tx
+        if priority:
+            params["priority"] = priority
+        if unique:
+            params["unique"] = unique
+
+        return self._post('invoke_contract', params)
+
+
+    def process_invoke_data(self, data):
+        """
+        Process transaction data returned from a smart contract invocation.
+
+        :param data: Raw invoke data as a bytes array (returned from `invoke_contract`).
+        :return: Transaction ID of the executed contract.
+        """
+        if not data:
+            raise ValueError("Data parameter is required for processing contract invocation.")
+        
+        params = {"data": data}
+        return self._post('process_invoke_data', params)
+
+

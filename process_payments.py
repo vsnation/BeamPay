@@ -1,16 +1,48 @@
 from __future__ import print_function
 import math
 import asyncio
+import json
 import datetime
 import traceback
 from lib.beam import BEAMWalletAPI
 from db import db
 from config import BEAM_API_RPC, send_to_logs, CONFIRMATION_THRESHOLD
+from config import VERIFIED_CA, DEX_CONTRACT_ID
+import aiohttp
+
 
 # Configuration
 beam_api = BEAMWalletAPI(BEAM_API_RPC)
 
-# Constants
+wallet_status = beam_api.wallet_status()
+print(beam_api.block_details(wallet_status['current_height']))
+
+# Update BEAM Price
+COINGECKO_API_URL = "https://api.coingecko.com/api/v3/simple/price?ids=beam&vs_currencies=usd"
+
+async def fetch_beam_price():
+    """Fetch BEAM price from CoinGecko and store in MongoDB."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(COINGECKO_API_URL) as response:
+                data = await response.json()
+
+        if "beam" not in data or "usd" not in data["beam"]:
+            print("⚠️ Failed to fetch BEAM price from CoinGecko.")
+            return
+
+        beam_price = data["beam"]["usd"]
+
+        await db.price.update_one(
+            {"_id": "beam_usd"},
+            {"$set": {"price": beam_price, "last_updated": datetime.datetime.utcnow()}},
+            upsert=True
+        )
+
+        print(f"✅ Updated BEAM price: ${beam_price}")
+
+    except Exception as e:
+        print(f"❌ Error fetching BEAM price: {e}")
 
 # Load assets globally at startup
 ASSETS = {}
@@ -19,7 +51,7 @@ async def load_assets():
     """Load asset metadata from the database."""
     global ASSETS
     assets = await db.assets.find().to_list(None)
-    ASSETS = {str(asset["_id"]): asset.get("metadata_pairs", {}).get("UN", f"Asset {asset['_id']}") for asset in assets}
+    ASSETS = {str(asset["_id"]): asset.get("meta", {}).get("UN", f"Asset {asset['_id']}") for asset in assets}
 
 async def process_transactions():
     """Processes and updates transactions in the database."""
@@ -87,7 +119,7 @@ async def process_transactions():
                         "_id": tx_id,
                         "status": status,
                         "status_string": tx["status_string"],
-                        "income": tx["income"],
+                        "income": tx.get("income", None),
                         "type": tx["tx_type"],
                         "type_string": tx["tx_type_string"],
                         "asset_id": asset_id,
@@ -98,7 +130,7 @@ async def process_transactions():
                         "sender_identity": tx.get("sender_identity", ""),
                         "receiver_identity": tx.get("receiver_identity", ""),
                         "comment": tx.get("comment", ""),
-                        "create_time": tx["create_time"],
+                        "create_time": int(tx["create_time"]),
                         "confirmations": confirmations,
                         "kernel": tx.get("kernel", ""),
                         "failure_reason": tx.get("failure_reason", ""),
@@ -371,81 +403,188 @@ async def verify_balances():
         traceback.print_exc()
 
 
-
 async def sync_assets():
-    """
-    Synchronize all registered assets on the Beam blockchain with MongoDB.
-    """
+    """Synchronize all registered assets on the Beam blockchain and DEX with MongoDB."""
     try:
-        print("Syncing assets from the Beam blockchain...")
-        beam_asset = { "_id" : "0", "asset_id" : 0, "asset_meta" : "", "confirmations" : 0, "height" : 0, "issue_height" : 0, "owner_id" : "", "emission" : "", "locked_amount" : "", "max_emission" : "", "metadata_signature" : "", "is_owned" : False, "schema_version" : "", "nft_metadata" : "", "nft_rules" : "", "updated_at" : 0, "metadata" : "STD:SCH_VER=1;N=Beam Token;SN=Beam;UN=BEAM;NTHUN=GROTH", "metadata_pairs" : { "N" : "Beam Token", "NTHUN" : "GROTH", "SCH_VER" : "1", "SN" : "Beam", "UN" : "BEAM" }, "decimals" : 8 }
+        print("🔄 Syncing assets...")
+
+        # Ensure BEAM (asset_id = 0) exists in the database
+        beam_asset = {
+            "_id": "0", "asset_id": 0, "decimals": 8,
+            "metadata": "STD:SCH_VER=1;N=Beam Token;SN=Beam;UN=BEAM;NTHUN=GROTH;OPT_FAVICON_URL=https://beam.mw/svg/logo.svg",
+            "meta": {
+                "N": "Beam Token", "NTHUN": "GROTH", "SCH_VER": "1", "SN": "Beam", "UN": "BEAM",
+                "OPT_FAVICON_URL": "https://beam.mw/svg/logo.svg"
+            },
+            "confirmations": 0, "height": 0, "issue_height": 0, "owner_id": "", "is_verified": True
+        }
         _is_beam_exist = await db.assets.find_one({"_id": "0"})
         if not _is_beam_exist:
             await db.assets.insert_one(beam_asset)
 
-
-        # Fetch asset list from Beam blockchain
+        # 1️⃣ Fetch assets from Beam blockchain
         assets = beam_api.assets_list(refresh=True)
         if not assets:
-            print("No assets found on the Beam blockchain.")
-            return
+            print("⚠️ No assets found on the Beam blockchain.")
+        else:
+            await process_assets(assets)
 
-        for asset in assets:
-            asset_id = str(asset["asset_id"])  # Convert asset_id to string for MongoDB keys
-
-            # Fetch existing asset data from the database
-            existing_asset = await db.assets.find_one({"_id": asset_id})
-
-            decimals = 8
-            if asset.get("metadata_pairs", {}) and "NTH_RATIO" in asset["metadata_pairs"]:
+        # 2️⃣ Fetch assets from Beam DEX (if enabled)
+        if DEX_CONTRACT_ID:
+            print("🔄 Fetching assets from DEX contract...")
+            dex_assets = beam_api.invoke_contract(contract_file="./dapps/dex_app.wasm", args="role=manager,action=view_all_assets")
+            if dex_assets and "output" in dex_assets:
                 try:
-                    decimals = int(math.log10(int(asset["metadata_pairs"]['NTH_RATIO'])))
-                except Exception as exc:
-                    decimals = 8
+                    assets_data = json.loads(dex_assets["output"]).get("res", [])
+                    await process_assets(assets_data, is_dex=True)
+                except Exception as e:
+                    print(f"⚠️ Error parsing DEX asset data: {e}")
 
-            # Prepare asset data
-            asset_data = {
-                "_id": asset_id,
-                "asset_id": asset["asset_id"],
-                "asset_meta": asset.get("asset_meta", ""),
-                "confirmations": asset.get("confirmations", 0),
-                "height": asset.get("height", 0),
-                "issue_height": asset.get("issue_height", 0),
-                "owner_id": asset.get("owner_id", ""),
-                "emission": asset.get("emission", ""),
-                "locked_amount": asset.get("locked_amount", ""),
-                "max_emission": asset.get("max_emission", ""),
-                "decimals": decimals,
-                "metadata": asset.get("metadata", ""),
-                "metadata_pairs": asset.get("metadata_pairs", {}),
-                "metadata_signature": asset.get("metadata_signature", ""),
-                "is_owned": asset.get("is_owned", False),
-                "schema_version": asset.get("schema_version", ""),
-                "nft_metadata": asset.get("nft_metadata", ""),
-                "nft_rules": asset.get("nft_rules", ""),
-                "updated_at": asset.get("updated_at", 0),
-            }
+        # 3️⃣ Fetch liquidity pools & update asset rates (if DEX enabled)
+        if DEX_CONTRACT_ID:
+            await sync_liquidity_pools()
 
-            # If asset already exists, update if changes are detected
-            if existing_asset:
-                del asset_data["_id"]  # MongoDB does not allow updating _id
-                await db.assets.update_one({"_id": asset_id}, {"$set": asset_data})
-                #print(f"Updated asset {asset_id}")
-            else:
-                # Insert new asset
-                await db.assets.insert_one(asset_data)
-                print(f"Inserted new asset {asset_id}")
-
-        print("Asset synchronization completed successfully.")
+        print("✅ Asset synchronization completed.")
 
     except Exception as e:
-        print(f"Error syncing assets: {e}")
+        print(f"⚠️ Error syncing assets: {e}")
         traceback.print_exc()
+
+
+async def process_assets(assets, is_dex=False):
+    """Processes and updates asset data in the database."""
+    for asset in assets:
+        asset_id = str(asset["asset_id"] if not is_dex else asset["aid"])
+        metadata = asset.get("metadata", "")
+
+        # Parse metadata (convert metadata string to dict)
+        meta = {}
+        try:
+            for pair in metadata.split(";"):
+                key, value = pair.split("=")
+                meta[key] = value
+        except Exception:
+            pass  # Skip if metadata is invalid
+
+        # Determine decimals (using NTH_RATIO)
+        decimals = 8
+        if "NTH_RATIO" in meta:
+            try:
+                decimals = int(math.log10(int(meta["NTH_RATIO"])))
+            except Exception:
+                pass  # Keep default
+
+        # Check if asset is verified
+        is_verified = asset_id in VERIFIED_CA if VERIFIED_CA else False
+
+        # Prepare asset data
+        asset_data = {
+            "_id": asset_id, "asset_id": int(asset_id), "decimals": decimals,
+            "metadata": metadata, "meta": meta,
+            "confirmations": asset.get("confirmations", 0), "height": asset.get("height", 0),
+            "issue_height": asset.get("issue_height", 0), "owner_id": asset.get("owner_id", ""),
+            "is_verified": is_verified
+        }
+
+        # Update or insert asset into the database
+        existing_asset = await db.assets.find_one({"_id": asset_id})
+        if existing_asset:
+            del asset_data["_id"]
+            await db.assets.update_one({"_id": asset_id}, {"$set": asset_data})
+        else:
+            await db.assets.insert_one(asset_data)
+            print(f"✅ Inserted new asset {asset_id}")
+
+    print(f"✅ Processed {len(assets)} assets ({'DEX' if is_dex else 'Blockchain'})")
+
+async def sync_liquidity_pools():
+    """
+    Synchronize liquidity pool data from the Beam DEX contract and update db.assets with only rates.
+    """
+    if not DEX_CONTRACT_ID:
+        print("⚠️ No DEX_CONTRACT_ID found. Skipping liquidity sync.")
+        return
+
+    try:
+        print("🔄 Fetching liquidity pools from DEX...")
+
+        # Call the DEX contract
+        pools_response = beam_api.invoke_contract(
+            contract_file="./dapps/dex_app.wasm",
+            args=f"role=manager,action=pools_view,cid={DEX_CONTRACT_ID}"
+        )
+
+        if not pools_response or "output" not in pools_response:
+            print("⚠️ No response from DEX pools.")
+            return
+        
+        pools_data = json.loads(pools_response["output"]).get("res", [])
+
+        if not pools_data:
+            print("⚠️ No pools found in the contract response.")
+            return
+
+        # Fetch BEAM price for USD conversion
+        beam_price_data = await db.price.find_one({"_id": "beam_usd"})
+        beam_price = float(beam_price_data["price"]) if beam_price_data else 0
+
+        # Dictionary to store updates
+        asset_updates = {}
+
+        for pool in pools_data:
+            aid1, aid2 = str(pool["aid1"]), str(pool["aid2"])
+
+            # Get rates
+            rate1_2 = float(pool.get("k1_2", 0))
+            rate2_1 = float(pool.get("k2_1", 0))
+
+            # BEAM Price Calculation
+            rate_beam_1, rate_beam_2 = None, None
+            if aid1 == "0":
+                rate_beam_2 = rate1_2
+            elif aid2 == "0":
+                rate_beam_1 = rate2_1
+
+            # USD Pricing
+            rate1_usd, rate2_usd = None, None
+            if beam_price > 0:
+                rate1_usd = rate_beam_1 * beam_price if rate_beam_1 else None
+                rate2_usd = rate_beam_2 * beam_price if rate_beam_2 else None
+
+            # Store price conversions in each asset
+            asset_updates[aid1] = {
+                f"rate_{aid1}_{aid2}": str(rate1_2),
+                "rate_beam": str(rate_beam_1) if rate_beam_1 else None,
+                "rate_usd": str(rate1_usd) if rate1_usd else None
+            }
+
+            asset_updates[aid2] = {
+                f"rate_{aid2}_{aid1}": str(rate2_1),
+                "rate_beam": str(rate_beam_2) if rate_beam_2 else None,
+                "rate_usd": str(rate2_usd) if rate2_usd else None
+            }
+
+        # Batch update asset prices
+        asset_update_queries = [
+            db.assets.update_one({"_id": aid}, {"$set": data}, upsert=True)
+            for aid, data in asset_updates.items()
+        ]
+
+        # Execute all updates in parallel
+        await asyncio.gather(*asset_update_queries)
+
+        print("✅ Liquidity pools synchronized successfully.")
+
+    except Exception as e:
+        print(f"❌ Error syncing liquidity pools: {e}")
+        traceback.print_exc()
+
 
 async def process_payments():
     """
     Main function to update rates, addresses, and process transactions.
     """
+    await fetch_beam_price()
     await sync_assets()
     await load_assets()
     await verify_balances()

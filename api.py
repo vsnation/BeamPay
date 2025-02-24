@@ -16,9 +16,6 @@ app = FastAPI(
     title="BeamPay API",
     description="API Documentation for BeamPay",
     version="1.0.0",
-    openapi_url="/api/openapi.json",  # Ensure OpenAPI schema is available
-    docs_url="/api/docs",  # This ensures docs appear at your desired URL
-    redoc_url="/api/redoc"  # Optional: ReDoc documentation
 )
 
 @app.get("/api/health")
@@ -50,7 +47,7 @@ async def custom_swagger_ui(credentials: HTTPBasicCredentials = Depends(verify_c
     Protects the Swagger UI with basic authentication.
     """
     return get_swagger_ui_html(
-        openapi_url="/openapi.json",
+        openapi_url="/api/openapi.json",
         title="Secure Swagger UI"
     )
 
@@ -95,14 +92,12 @@ async def get_address(note: str = Body(...)):
     
     return [{"address": a["_id"], "create_time": a["create_time"], "expired": a["expired"]} for a in addresses]
 
-#TODO add other dependencies if this worked well
-# , dependencies=[Depends(get_api_key)]
 
 @app.get("/assets")
 async def get_assets():
     """Return all assets and their decimals from the database."""
     assets = await db.assets.find().to_list(None)
-    return [{"asset_id": a["_id"], "meta": a["metadata_pairs"], "decimals": a.get("decimals", 8)} for a in assets]
+    return assets
 
 
 @app.post("/withdraw", dependencies=[Depends(get_api_key)])

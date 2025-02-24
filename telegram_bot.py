@@ -75,7 +75,7 @@ async def balance(update: Update, context: CallbackContext):
             decimals = 8
         else:
             asset = assets.get(asset_id, {})
-            name = asset.get("metadata_pairs", {}).get("N", f"Asset {asset_id}")  # Default to Asset ID if no name
+            name = asset.get("meta", {}).get("N", f"Asset {asset_id}")  # Default to Asset ID if no name
             decimals = asset.get("decimals", 8)  # Default to 8 decimals
 
         formatted_available = int(raw_value) / (10 ** decimals)  # Convert to human-readable format

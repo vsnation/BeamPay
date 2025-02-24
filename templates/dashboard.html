@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BeamPay Admin Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            padding: 0;
+            background-color: #f8f9fa;
+        }
+        h2 {
+            text-align: center;
+        }
+        .stats-container {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 20px;
+        }
+        .stat-box {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            width: 30%;
+        }
+        .stat-box h3 {
+            margin: 0;
+            color: #007bff;
+        }
+        .stat-box p {
+            font-size: 18px;
+            font-weight: bold;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+	    font-size: 16px;
+	    margin: 20px 0;
+            background: white;
+	    text-align: left;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+	    white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+	    max-width: 180px;
+            text-align: center;
+        }
+        th {
+            background-color: #007bff;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>🚀 BeamPay Admin Dashboard</h2>
+
+    <!-- Statistics Section -->
+    <div class="stats-container">
+        <div class="stat-box">
+            <h3>Total Deposits</h3>
+            <p>{{ total_deposits }}</p>
+        </div>
+        <div class="stat-box">
+            <h3>Pending Withdrawals</h3>
+            <p>{{ pending_withdrawals }}</p>
+        </div>
+        <div class="stat-box">
+            <h3>Total Users</h3>
+            <p>{{ total_users }}</p>
+        </div>
+    </div>
+
+    <!-- Balance Comparison Table -->
+    <h3>⚖️ Balance Comparison (Wallet vs Database)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Asset</th>
+                <th>Wallet Balance</th>
+                <th>Database Balance</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for asset in balance_comparison %}
+            <tr>
+                <td>
+                    {% set asset_data = assets | selectattr("_id", "equalto", asset.asset_id) | first %}
+                    {{ asset_data.meta.N if asset_data else "Unknown Asset" }} ({{ asset.asset_id }})
+                </td>
+                <td>{{ asset.api_available | int / (10 ** (asset_data.decimals if asset_data else 8)) }} {{ asset_data.meta.UN if asset_data else "" }}</td>
+                <td>{{ asset.db_available | int / (10 ** (asset_data.decimals if asset_data else 8)) }} {{ asset_data.meta.UN if asset_data else "" }}</td>
+                <td class="{% if asset.api_available != asset.db_available %}error{% else %}success{% endif %}">
+                    {% if asset.api_available == asset.db_available %}
+                        ✅ Matched
+                    {% else %}
+                        ❌ Mismatch (Diff: {{ (asset.api_available - asset.db_available) | int / (10 ** (asset_data.decimals if asset_data else 8)) }})
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- Recent Transactions -->
+    <h3>📌 Recent Transactions</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Transaction ID</th>
+                <th>Amount</th>
+                <th>Asset</th>
+                <th>Status</th>
+                <th>Sender</th>
+                <th>Receiver</th>
+                <th>Confirmations</th>
+                <th>Date</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for tx in transactions %}
+            <tr>
+                <td>{{ tx._id }}</td>
+                <td>
+                    {% set asset_data = assets | selectattr("_id", "equalto", tx.asset_id) | first %}
+                    {{ tx.value | int / (10 ** (asset_data.decimals if asset_data else 8)) }} {{ asset_data.meta.UN if asset_data else "" }}
+                </td>
+                <td>
+                    {{ asset_data.meta.N if asset_data else "Unknown Asset" }} ({{ tx.asset_id }})
+                </td>
+                <td class="{% if tx.status == 3 %}success{% elif tx.status in [2,4] %}error{% else %}pending{% endif %}">
+                    {{ tx.status_string }}
+                </td>
+		<td>{{ tx.sender }}</td>
+                <td>{{ tx.receiver }}</td>
+                <td>{{ tx.confirmations }}</td>
+                <td>{{ tx.create_time | datetimeformat }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- Addresses and Balances -->
+    <h3>🏦 Registered Addresses & Balances</h3>
+    {% set whitelisted_assets = ["0", "1", "2"] %}
+    <table>
+        <thead>
+            <tr>
+                <th>Address</th>
+                {% for asset in assets if asset._id in whitelisted_assets %}
+                    <th>{{ asset.meta.N }} ({{ asset.asset_id }})</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for address in addresses %}
+            <tr>
+                <td>{{ address._id }}</td>
+                {% for asset in assets if asset._id in whitelisted_assets %}
+                    <td>
+                        {% set balance = address.balance.available.get(asset.asset_id|string, "0") %}
+                        {{ balance | int / (10 ** asset.decimals) }} {{ asset.meta.UN }}
+                    </td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+
+</div>
+
+</body>
+</html>
