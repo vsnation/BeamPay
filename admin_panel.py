@@ -6,7 +6,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
 from lib.beam import BEAMWalletAPI
-from config import BEAM_API_RPC, send_to_logs
+from config import BEAM_API_RPC, send_to_logs, VERIFIED_CA
 import asyncio
 from db import db
 from datetime import datetime
@@ -70,6 +70,7 @@ async def dashboard(request: Request, credentials: HTTPBasicCredentials = Depend
         "pending_withdrawals": pending_withdrawals,
         "total_users": total_users,
         "balance_comparison": _balance_comparison,
+        "whitelisted_assets": VERIFIED_CA 
     })
 
 

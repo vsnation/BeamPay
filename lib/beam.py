@@ -229,25 +229,33 @@ class BEAMWalletAPI:
 
         return self._post('tx_list', params)
 
-    def get_utxo(self, count=0, skip=0, sort_field="amount", sort_direction="asc"):
+    def get_utxo(self, count=0, skip=0, asset_id=None, sort_field="amount", sort_direction="asc"):
         """
         Retrieve a list of unlocked UTXOs (Unspent Transaction Outputs).
 
         :param count: Number of UTXOs to retrieve (0 for all).
         :param skip: Number of UTXOs to skip (default is 0).
+        :param asset_id: Filter UTXOs by specific asset_id (0 for BEAM, >0 for CAs).
         :param sort_field: Field to sort by (e.g., 'amount', 'asset_id').
         :param sort_direction: Sorting direction ('asc' or 'desc').
         :return: List of UTXOs.
         """
         params = {
-            'count': count,
-            'skip': skip,
-            'sort': {
-                'field': sort_field,
-                'direction': sort_direction
+            "count": count,
+            "skip": skip,
+            "sort": {
+                "field": sort_field,
+                "direction": sort_direction
             }
         }
-        return self._post('get_utxo', params)
+
+        if asset_id is not None:
+            params['assets'] = True
+            params["filter"] = {"asset_id": int(asset_id)}
+
+
+        return self._post("get_utxo", params)
+    
 
     def assets_list(self, refresh=False, height=None):
         """

@@ -166,11 +166,11 @@
 
     <!-- Addresses and Balances -->
     <h3>🏦 Registered Addresses & Balances</h3>
-    {% set whitelisted_assets = ["0", "1", "2"] %}
     <table>
         <thead>
             <tr>
                 <th>Address</th>
+		<th>Note</th>
                 {% for asset in assets if asset._id in whitelisted_assets %}
                     <th>{{ asset.meta.N }} ({{ asset.asset_id }})</th>
                 {% endfor %}
@@ -180,6 +180,7 @@
             {% for address in addresses %}
             <tr>
                 <td>{{ address._id }}</td>
+		<td>{{ address.comment}}</td>
                 {% for asset in assets if asset._id in whitelisted_assets %}
                     <td>
                         {% set balance = address.balance.available.get(asset.asset_id|string, "0") %}

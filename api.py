@@ -104,36 +104,34 @@ async def get_assets():
 async def withdraw(
     from_address: str = Body(...),
     to_address: str = Body(...),
-    asset_id: str = Body(...),
+    asset_id: int = Body(...),
     amount: int = Body(...),
     fee: int = Body(1100000)
 ):
-    """Locks funds and processes a withdrawal request."""
+    """Validates and locks funds for withdrawal, actual transaction will be processed later."""
 
-    # Fetch address data from DB
+    # Fetch sender's balance from DB
     from_address_data = await db.addresses.find_one({"_id": from_address})
-    receiver_address_data = await db.addresses.find_one({"_id": to_address})  # Check if receiver is in db
+    receiver_address_data = await db.addresses.find_one({"_id": to_address})  # Check if receiver is in system
     if not from_address_data:
-        raise HTTPException(status_code=404, detail="Address not found")
+        raise HTTPException(status_code=404, detail="Sender address not found")
 
     # Extract available balances
-    available_balance = int(from_address_data["balance"]["available"].get(asset_id, "0"))
+    available_balance = int(from_address_data["balance"]["available"].get(str(asset_id), "0"))
     available_beam = int(from_address_data["balance"]["available"].get("0", "0"))  # BEAM (0) balance
     locked_beam = int(from_address_data["balance"]["locked"].get("0", "0"))  # Locked BEAM balance
-    locked_asset = int(from_address_data["balance"]["locked"].get(asset_id, "0"))  # Locked asset balance
+    locked_asset = int(from_address_data["balance"]["locked"].get(str(asset_id), "0"))  # Locked asset balance
 
-    # If BEAM (0) is being sent, lock total_required (amount + fee)
-    if asset_id == "0":
-        total_required = amount + fee  # Total BEAM required for transaction
-
+    # Validate BEAM balance if it's the main asset (Gas Fees)
+    if asset_id == 0:
+        total_required = amount + fee  # BEAM + transaction fee
         if available_beam < total_required:
             raise HTTPException(status_code=400, detail="Insufficient BEAM balance (including transaction fee)")
 
-        # Lock total_required in BEAM (0)
+        # Lock funds
         new_available_beam = available_beam - total_required
         new_locked_beam = locked_beam + total_required
 
-        # Update database with new locked and available balances
         await db.addresses.update_one(
             {"_id": from_address},
             {"$set": {
@@ -141,23 +139,20 @@ async def withdraw(
                 f"balance.locked.0": str(new_locked_beam)
             }}
         )
-
-    else:  # If sending an asset (not BEAM)
+    else:  # If sending an Asset
         if available_balance < amount:
             raise HTTPException(status_code=400, detail="Insufficient asset balance")
 
         if available_beam < fee:
             raise HTTPException(status_code=400, detail="Insufficient BEAM balance for transaction fee")
 
-        # Lock the asset amount
+        # Lock asset amount & BEAM fee
         new_available_asset = available_balance - amount
         new_locked_asset = locked_asset + amount
 
-        # Lock BEAM fee separately
         new_available_beam = available_beam - fee
         new_locked_beam = locked_beam + fee
 
-        # Update database with locked balances for asset and BEAM
         await db.addresses.update_one(
             {"_id": from_address},
             {"$set": {
@@ -168,63 +163,31 @@ async def withdraw(
             }}
         )
 
-    # If receiver exists in the system, lock funds in their account too
+    # Handle Internal Transfers (Lock Receiver’s Balance)
     if receiver_address_data:
-        new_locked_receiver = int(receiver_address_data["balance"]["locked"].get(asset_id, "0")) + amount
+        new_locked_receiver = int(receiver_address_data["balance"]["locked"].get(str(asset_id), "0")) + amount
         await db.addresses.update_one(
             {"_id": to_address},
-            {"$set": {
-                f"balance.locked.{asset_id}": str(new_locked_receiver)
-            }}
+            {"$set": {f"balance.locked.{asset_id}": str(new_locked_receiver)}}
         )
 
-    # Call Beam API to create the withdrawal transaction
-    result = beam_api.tx_send(value=amount, fee=fee, sender=from_address, receiver=to_address, asset_id=int(asset_id))
-
-    if not result:
-        # ❌ Transaction Failed: Revert locked balances
-        if asset_id == "0":
-            await db.addresses.update_one(
-                {"_id": from_address},
-                {"$set": {
-                    f"balance.available.0": str(available_beam),
-                    f"balance.locked.0": str(locked_beam)
-                }}
-            )
-        else:
-            await db.addresses.update_one(
-                {"_id": from_address},
-                {"$set": {
-                    f"balance.available.{asset_id}": str(available_balance),
-                    f"balance.locked.{asset_id}": str(locked_asset),
-                    f"balance.available.0": str(available_beam),
-                    f"balance.locked.0": str(locked_beam)
-                }}
-            )
-        
-        await db.txs.delete_one({"_id": tx_id})  # Remove failed tx from DB
-        await send_to_logs(f"❌ *Withdrawal Failed*\n🔗 *Address:* `{from_address}`\n💰 *Amount:* `{amount}` `{asset_id}`\n⚠️ *Error: API Failure*", parse_mode="Markdown")
-        raise HTTPException(status_code=500, detail="Failed to process withdrawal")
-
-
-    # Store transaction in DB (if needed for future processing)
-    tx_id = result["txId"]
-    await db.txs.insert_one({
-        "_id": tx_id,
-        "status": 0,
-        "status_string": "pending",
-        "type": "withdrawal",
+    # Store withdrawal in `pending_withdrawals`
+    withdrawal_request = {
+        "status": "pending",
         "asset_id": asset_id,
         "value": str(amount),
         "fee": str(fee),
         "sender": from_address,
         "receiver": to_address,
         "create_time": datetime.datetime.utcnow().timestamp(),
-        "confirmations": 0,
-        "success": False,
-    })
+    }
 
-    return {"txId": tx_id, "status": "pending"}
+    await db.pending_withdrawals.insert_one(withdrawal_request)
+
+    # 🔔 Notify Admins
+    await send_to_logs(f"💸 *Withdrawal Queued*\n💰 `{amount}` `{asset_id}`\n🔗 `{to_address}`", parse_mode="Markdown")
+
+    return {"status": "pending", "message": "Withdrawal request recorded"}
 
 
 @app.get("/deposits", dependencies=[Depends(get_api_key)])
