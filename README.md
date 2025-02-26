@@ -29,9 +29,9 @@ BeamPay/
 -	✅ **Database Sync** - Sync addresses, transactions, and assets in MongoDB
 -	✅ **Webhook Integration** - Notify services of deposits & withdrawals
 -	✅ **Telegram Alerts** - Notify users & admins about transfers
+-	✅ **Admin Dashboard** - Statistics & balance verification
 
 🔄 **In Progress**
--	🚧 **Admin Dashboard** - Statistics & balance verification
 -	🚧 **Transaction History** - User-friendly logs & filters
 - 🚧 **Security Enhancements** - API Key Authentication & IP Whitelisting
 
@@ -137,13 +137,6 @@ sudo systemctl enable beampay-api
 sudo systemctl enable beampay-payments
 sudo systemctl start beampay-api
 sudo systemctl start beampay-payments
-```
-
-#### **Using Crontab (Alternative)**
-> Run `crontab -e` and add:
-```cron
-* * * * * pgrep -f "uvicorn api:app" > /dev/null || systemctl restart beampay-api
-* * * * * pgrep -f "process_payments.py" > /dev/null || systemctl restart beampay-payments
 ```
 
 ---
