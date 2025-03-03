@@ -1,0 +1,27 @@
+[
+  {
+    "asset_id": 0,
+    "logo_url": "https://beam.mw/svg/logo.svg",
+    "about": "$BEAM is the native cryptocurrency of the BeamPrivacy network, a privacy-focused blockchain built on the Mimblewimble protocol. Designed for secure, private, and scalable transactions, Beam ensures financial confidentiality by default. With features like confidential assets and atomic swaps, Beam empowers users to control their financial privacy while maintaining compatibility with decentralized finance (DeFi) ecosystems. It’s a key player in the privacy coin space, offering a user-friendly experience for those who value financial sovereignty"
+  },
+  {
+    "asset_id": 4,
+    "logo_url": "https://raw.githubusercontent.com/vsnation/BeamPay/master/assets/crown.ico",
+    "about": ""
+  },
+  {
+    "asset_id": 9,
+    "logo_url": "https://raw.githubusercontent.com/vsnation/BeamPay/master/assets/tico.ico",
+    "about": ""
+  },
+  {
+    "asset_id": 7,
+    "logo_url": "https://raw.githubusercontent.com/vsnation/BeamPay/master/assets/tico.ico",
+    "about": ""
+  },
+  {
+    "asset_id": 47,
+    "logo_url": "https://raw.githubusercontent.com/vsnation/BeamPay/master/assets/47_nph.svg",
+    "about": ""
+  }
+]
