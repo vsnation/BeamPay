@@ -1,6 +1,7 @@
 from __future__ import print_function
 import math
 import asyncio
+import requests
 import json
 import datetime
 import traceback
@@ -16,7 +17,7 @@ beam_api = BEAMWalletAPI(BEAM_API_RPC)
 
 wallet_status = beam_api.wallet_status()
 print(beam_api.block_details(wallet_status['current_height']))
-#print(beam_api.get_utxo(asset_id='0', count=100, sort_field="amount", sort_direction="asc"))
+#print(beam_api.get_utxo(count=100, sort_field="status", sort_direction="asc", filter={"asset_id": int(0)}))
 
 # Update BEAM Price
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3/simple/price?ids=beam&vs_currencies=usd"
@@ -114,7 +115,7 @@ async def process_transactions():
                             {"$set": {"success": True}}
                         )
 
-                else:
+                elif status in [1, 3, 5]:
                     # Insert new transaction
                     tx_data = {
                         "_id": tx_id,
@@ -140,18 +141,16 @@ async def process_transactions():
                     }
                     await db.txs.insert_one(tx_data)
 
-                    # Handle balance updates based on the transaction status
-                    if status == 3:
-                        # Update locked balance
-                        await handle_locked_balance(tx)
-                        # Refresh available balance only if confirmations are sufficient
-                        if confirmations >= CONFIRMATION_THRESHOLD:
-                            await handle_finalized_transaction(tx)
-                            # Mark transaction as successfully processed
-                            await db.txs.update_one(
-                                {"_id": tx_id},
-                                {"$set": {"success": True}}
-                            )
+                    # Update locked balance
+                    await handle_locked_balance(tx)
+                    # Refresh available balance only if confirmations are sufficient
+                    if confirmations >= CONFIRMATION_THRESHOLD:
+                        await handle_finalized_transaction(tx)
+                        # Mark transaction as successfully processed
+                        await db.txs.update_one(
+                            {"_id": tx_id},
+                            {"$set": {"success": True}}
+                        )
 
             except Exception as exc:
                 traceback.print_exc()
@@ -213,7 +212,7 @@ async def handle_finalized_transaction(tx):
     # If sender & receiver are both in the system, notify them both
     if sender_exists and receiver_exists:
         await send_to_logs(
-            f"🔄 *Internal Transfer Confirmed*\n💱 *Amount:* `{value_formatted} {asset_name}`\n🔀 *From:* `{sender}` ➡ *To:* `{receiver}`\n🆔 *Kernel:* `{kernel}`",
+            f"*[3/3]* 🔄 *Internal Transfer Confirmed*\n💱 *Amount:* `{value_formatted} {asset_name}`\n🔀 *From:* `{sender}` ➡ *To:* `{receiver}`\n🆔 *Kernel:* `{kernel}`",
             parse_mode="Markdown"
         )
         is_notified = True
@@ -226,7 +225,7 @@ async def handle_finalized_transaction(tx):
         await update_balance(sender, "0", locked_delta=-fee)  # Deduct BEAM fee
         if not is_notified:
             await send_to_logs(
-                f"✅ *Withdrawal Confirmed*\n💸 *Amount:* `{value_formatted} {asset_name}`\n📤 *From:* `{sender}`\n🆔 *Kernel:* `{kernel}`",
+                f"*[3/3]*✅ *Withdrawal Confirmed*\n💸 *Amount:* `{value_formatted} {asset_name}`\n📤 *From:* `{sender}`\n🆔 *Kernel:* `{kernel}`",
                 parse_mode="Markdown"
             )
 
@@ -483,6 +482,20 @@ async def sync_assets():
         if DEX_CONTRACT_ID:
             await sync_liquidity_pools()
 
+        # 4️⃣ Fetch & Overwrite CA Metadata from External JSON File
+        ca_updates = requests.get("https://raw.githubusercontent.com/vsnation/BeamPay/master/ca_assets_updates.json").json()
+        for asset in ca_updates:
+            asset_id = str(asset["asset_id"])
+            update_data = {}
+            if "logo_url" in asset and asset["logo_url"]:
+                update_data["meta.OPT_FAVICON_URL"] = asset["logo_url"]
+            if "about" in asset and asset["about"]:
+                update_data["meta.ABOUT"] = asset["about"]
+
+            if update_data:
+                await db.assets.update_one({"_id": asset_id}, {"$set": update_data})
+                print(f"✅ Updated asset {asset_id}: {update_data}")
+
         print("✅ Asset synchronization completed.")
 
     except Exception as e:
@@ -624,114 +637,122 @@ async def process_withdrawal_queue():
 
     print("Processing Pending withdrawals.")
     async for tx in db.pending_withdrawals.find({"status": "pending"}):
-        sender = tx["sender"]
-        asset_id = tx["asset_id"]
-        amount = int(tx["value"])
-        fee = int(tx["fee"])
-        receiver = tx["receiver"]
+        try:
+            sender = tx["sender"]
+            asset_id = tx["asset_id"]
+            amount = int(tx["value"])
+            fee = int(tx["fee"])
+            receiver = tx["receiver"]
 
-        # TUDO Double check SENDER's address balance and math.
-        sender_data = await db.addresses.find_one({"_id": sender})
+            # TUDO Double check SENDER's address balance and math.
+            sender_data = await db.addresses.find_one({"_id": sender})
 
-        # Extract Balances
-        available_balance = int(sender_data["balance"]["available"].get(str(asset_id), "0"))
-        locked_balance = int(sender_data["balance"]["locked"].get(str(asset_id), "0"))
-        available_beam = int(sender_data["balance"]["available"].get("0", "0"))  # BEAM (for gas fees)
-        locked_beam = int(sender_data["balance"]["locked"].get("0", "0"))
+            # Extract Balances
+            available_balance = int(sender_data["balance"]["available"].get(str(asset_id), "0"))
+            locked_balance = int(sender_data["balance"]["locked"].get(str(asset_id), "0"))
+            available_beam = int(sender_data["balance"]["available"].get("0", "0"))  # BEAM (for gas fees)
+            locked_beam = int(sender_data["balance"]["locked"].get("0", "0"))
 
-        # Validate Locked Balance Matches Pending Withdrawals
-        pending_withdrawals = await db.pending_withdrawals.find({"sender": sender, "status": {"$ne": "sent_confirmed"}}).to_list(None)
-        pending_total = sum(int(t["value"]) + int(t['fee']) for t in pending_withdrawals if t["asset_id"] == asset_id)
-        
-        if locked_balance != pending_total:
+            # Validate Locked Balance Matches Pending Withdrawals
+            pending_withdrawals = await db.pending_withdrawals.find({"sender": sender, "status": {"$ne": "sent_confirmed"}}).to_list(None)
+            pending_total = sum(int(t["value"]) + int(t['fee']) if t['asset_id'] == 0 else int(t["value"]) for t in pending_withdrawals if t["asset_id"] == asset_id)
+            print(pending_total, locked_balance)
+            
+            if locked_balance != pending_total:
+                await db.pending_withdrawals.update_one(
+                    {"_id": tx["_id"]},
+                    {"$set": {"status": "admin_check"}}
+                )
+                await send_to_logs(
+                    f"🚨 *Balance Mismatch Detected!*\n"
+                    f"📤 *Sender:* `{sender}`\n"
+                    f"🔒 *Locked Balance:* `{locked_balance / 10**8:,.8f} {ASSETS.get(str(asset_id), 'Unknown Asset')}`\n"
+                    f"⏳ *Pending Withdrawals:* `{pending_total / 10**8:,.8f} {ASSETS.get(str(asset_id), 'Unknown Asset')}`\n"
+                    f"🆔 *TxID:* `{tx['_id']}`",
+                    parse_mode="Markdown"
+                )
+                continue  # Skip processing to prevent errors
+
+
+            # 🔹 Fetch UTXOs & Check Balance Again
+            utxos = beam_api.get_utxo(count=100, sort_field="status", sort_direction="asc", filter={"asset_id": int(asset_id)})
+            available_utxo_amount = sum(utxo["amount"] for utxo in utxos if utxo["status"] == 1)  # Only 'available' UTXOs
+
+            print(utxos)
+            print("AVAILABLE UTXOs", available_utxo_amount)
+            print(f"REQUIRED AMOUNT {amount}\t\t Asset ID: {asset_id}")
+            print(f"FEE {fee}\t\t Asset ID: 0")
+
+            # 🔹 If UTXOs are insufficient, delay the TX
+            if available_utxo_amount < (amount + fee) :
+                print(f"🚧 Insufficient UTXOs for {tx['_id']}. Retrying later.")
+                continue  # Try in next cycle
+
+            # 🔹 Mark TX as "processing" before sending (prevents race conditions)
             await db.pending_withdrawals.update_one(
                 {"_id": tx["_id"]},
-                {"$set": {"status": "admin_check"}}
+                {"$set": {"status": "processing"}}
             )
-            await send_to_logs(
-                f"🚨 *Balance Mismatch Detected!*\n"
-                f"📤 *Sender:* `{sender}`\n"
-                f"🔒 *Locked Balance:* `{locked_balance / 10**8:,.8f} {ASSETS.get(str(asset_id), 'Unknown Asset')}`\n"
-                f"⏳ *Pending Withdrawals:* `{pending_total / 10**8:,.8f} {ASSETS.get(str(asset_id), 'Unknown Asset')}`\n"
-                f"🆔 *TxID:* `{tx['_id']}`",
-                parse_mode="Markdown"
+
+            # 🔹 Send Withdrawal via BeamPay API
+            response = beam_api.tx_send(
+                value=amount,
+                fee=fee,
+                sender=sender,
+                receiver=receiver,
+                asset_id=asset_id
             )
-            continue  # Skip processing to prevent errors
 
+            # 🔹 If TX fails, revert status
+            if not response or "error" in response:
+                await db.pending_withdrawals.update_one(
+                    {"_id": tx["_id"]},
+                    {"$set": {"status": "pending"}}  # Revert back to pending
+                )
+                await send_to_logs(
+                    f"❌ *Withdrawal Failed (Pending TX)*\n"
+                    f"🔗 *Sender:* `{sender}`\n"
+                    f"💰 *Amount:* `{amount / 10**8:,.8f} {ASSETS.get(str(asset_id), 'Unknown Asset')}`\n"
+                    f"🆔 *Pending TX:* `{pending_tx['_id']}`",
+                    parse_mode="Markdown"
+                )
+                continue  # Retry in next loop
 
-        # 🔹 Fetch UTXOs & Check Balance Again
-        utxos = beam_api.get_utxo(asset_id=asset_id, count=100, sort_field="amount", sort_direction="asc")
-        available_utxo_amount = sum(utxo["amount"] for utxo in utxos if utxo["status"] == 1)  # Only 'available' UTXOs
+            tx_id = response["txId"]
 
-        print("AVAILABLE UTXOs", available_utxo_amount)
-        print("REQUIRED AMOUNT", amount + fee)
-
-        # 🔹 If UTXOs are insufficient, delay the TX
-        if available_utxo_amount < (amount + fee) :
-            print(f"🚧 Insufficient UTXOs for {tx['_id']}. Retrying later.")
-            continue  # Try in next cycle
-
-        # 🔹 Mark TX as "processing" before sending (prevents race conditions)
-        await db.pending_withdrawals.update_one(
-            {"_id": tx["_id"]},
-            {"$set": {"status": "processing"}}
-        )
-
-        # 🔹 Send Withdrawal via BeamPay API
-        response = beam_api.tx_send(
-            value=amount,
-            fee=fee,
-            sender=sender,
-            receiver=receiver,
-            asset_id=asset_id
-        )
-
-        # 🔹 If TX fails, revert status
-        if not response or "error" in response:
+            # 🔹 Mark TX as "sent"
             await db.pending_withdrawals.update_one(
                 {"_id": tx["_id"]},
-                {"$set": {"status": "pending"}}  # Revert back to pending
+                {"$set": {"txId": tx_id, "status": "sent"}}
             )
+
+            # 🔹 Store TX in `db.txs`
+            await db.txs.insert_one({
+                "_id": tx_id,
+                "status": 0,  # Pending
+                "status_string": "pending",
+                "type": "withdrawal",
+                "asset_id": asset_id,
+                "value": str(amount),
+                "fee": str(fee),
+                "sender": sender,
+                "receiver": receiver,
+                "create_time": datetime.datetime.utcnow().timestamp(),
+                "confirmations": 0,
+                "success": False,
+            })
+
             await send_to_logs(
-                f"❌ *Withdrawal Failed (Pending TX)*\n"
-                f"🔗 *Sender:* `{sender}`\n"
-                f"💰 *Amount:* `{amount / 10**8:,.8f} {ASSETS.get(str(asset_id), 'Unknown Asset')}`\n"
-                f"🆔 *Pending TX:* `{pending_tx['_id']}`",
+                f"*[2/3]* ✅ *Withdrawal Successful*\n"
+                f"💸 *Amount:* `{amount / 10**8:,.8f} {ASSETS.get(str(asset_id), '???')}`\n"
+                f"📤 *From:* `{sender}` ➡ *To:* `{receiver}`\n"
+                f"🆔 *TxID:* `{tx_id}`",
                 parse_mode="Markdown"
             )
-            continue  # Retry in next loop
+        except Exception as exc:
+            traceback.print_exc()
+            await send_to_logs(traceback.format_exc())
 
-        tx_id = response["txId"]
-
-        # 🔹 Mark TX as "sent"
-        await db.pending_withdrawals.update_one(
-            {"_id": tx["_id"]},
-            {"$set": {"txId": tx_id, "status": "sent"}}
-        )
-
-        # 🔹 Store TX in `db.txs`
-        await db.txs.insert_one({
-            "_id": tx_id,
-            "status": 0,  # Pending
-            "status_string": "pending",
-            "type": "withdrawal",
-            "asset_id": asset_id,
-            "value": str(amount),
-            "fee": str(fee),
-            "sender": sender,
-            "receiver": receiver,
-            "create_time": datetime.datetime.utcnow().timestamp(),
-            "confirmations": 0,
-            "success": False,
-        })
-
-        await send_to_logs(
-            f"✅ *Withdrawal Successful*\n"
-            f"💸 *Amount:* `{amount / 10**8:,.8f} {ASSETS.get(str(asset_id), '???')}`\n"
-            f"📤 *From:* `{sender}` ➡ *To:* `{receiver}`\n"
-            f"🆔 *TxID:* `{tx_id}`",
-            parse_mode="Markdown"
-        )
 
 
     await asyncio.sleep(90)  # Retry every 5 seconds
@@ -742,12 +763,16 @@ async def process_updates():
     print("Processing 120 Sec. Updates")
     await load_assets()
     while True:
-        await fetch_beam_price()
-        await sync_assets()
-        await load_assets()
-        await verify_balances()
-        await sync_addresses()
-        await asyncio.sleep(120)
+        try:
+            await fetch_beam_price()
+            await sync_assets()
+            await load_assets()
+            await verify_balances()
+            await sync_addresses()
+            await asyncio.sleep(120)
+        except Exception as exc:
+            traceback.print_exc()
+            await send_to_logs(traceback.format_exc())
 
 
 
@@ -759,7 +784,7 @@ async def process_payments():
         print("Processing Onchain Transactions. 30 Sec.")
         await process_transactions()  # Function that processes txs
         await process_withdrawal_queue() # Function that processes mempool
-        await asyncio.sleep(30)  # Avoid hammering the system
+        await asyncio.sleep(15)  # Avoid hammering the system
 
 async def main():
     """Runs both daemons simultaneously."""

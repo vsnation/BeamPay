@@ -106,9 +106,12 @@ async def withdraw(
     to_address: str = Body(...),
     asset_id: int = Body(...),
     amount: int = Body(...),
-    fee: int = Body(1100000)
+    fee: int = Body(100000)
 ):
     """Validates and locks funds for withdrawal, actual transaction will be processed later."""
+
+    if to_address == from_address:
+        raise HTTPException(status_code=404, detail="Sender can't send assets to itself")
 
     # Fetch sender's balance from DB
     from_address_data = await db.addresses.find_one({"_id": from_address})
@@ -126,7 +129,7 @@ async def withdraw(
     if asset_id == 0:
         total_required = amount + fee  # BEAM + transaction fee
         if available_beam < total_required:
-            raise HTTPException(status_code=400, detail="Insufficient BEAM balance (including transaction fee)")
+            return {"status": False, "msg": "Insufficient BEAM balance (including transaction fee)"}
 
         # Lock funds
         new_available_beam = available_beam - total_required
@@ -141,10 +144,10 @@ async def withdraw(
         )
     else:  # If sending an Asset
         if available_balance < amount:
-            raise HTTPException(status_code=400, detail="Insufficient asset balance")
+            return {"status": False, "msg": "Insufficient asset balance"}
 
         if available_beam < fee:
-            raise HTTPException(status_code=400, detail="Insufficient BEAM balance for transaction fee")
+            return {"status": False, "msg": "Insufficient BEAM balance for transaction fee"}
 
         # Lock asset amount & BEAM fee
         new_available_asset = available_balance - amount
@@ -185,9 +188,9 @@ async def withdraw(
     await db.pending_withdrawals.insert_one(withdrawal_request)
 
     # 🔔 Notify Admins
-    await send_to_logs(f"💸 *Withdrawal Queued*\n💰 `{amount}` `{asset_id}`\n🔗 `{to_address}`", parse_mode="Markdown")
+    await send_to_logs(f"*[1/3]*💸 *Withdrawal Queued*\n💰 `{amount}` `{asset_id}`\n🔗 `{to_address}`", parse_mode="Markdown")
 
-    return {"status": "pending", "message": "Withdrawal request recorded"}
+    return {"status": True, "result": True, "msg": "Withdrawal request recorded"}
 
 
 @app.get("/deposits", dependencies=[Depends(get_api_key)])
@@ -211,7 +214,7 @@ async def get_balances(address: str):
     return address_data["balance"]
 
 @app.get("/transactions", dependencies=[Depends(get_api_key)])
-async def get_transactions(address: str = Body(None), status: int = Body(None)):
+async def get_transactions(address: str = Body(None), status: int = Body(None), count: int = Body(10), skip: int = Body(0)):
     """Retrieve transactions (optionally filtered by address or status)."""
     query = {}
     if address:
@@ -219,7 +222,7 @@ async def get_transactions(address: str = Body(None), status: int = Body(None)):
     if status is not None:
         query["status"] = status
 
-    transactions = await db.txs.find(query).to_list(None)
+    transactions = await db.txs.find(query).skip(skip).limit(count).to_list(None)
     return transactions
 
 @app.post("/register_webhook", dependencies=[Depends(get_api_key)])

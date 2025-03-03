@@ -229,7 +229,7 @@ class BEAMWalletAPI:
 
         return self._post('tx_list', params)
 
-    def get_utxo(self, count=0, skip=0, asset_id=None, sort_field="amount", sort_direction="asc"):
+    def get_utxo(self, count=0, skip=0, sort_field="amount", sort_direction="asc", filter={}):
         """
         Retrieve a list of unlocked UTXOs (Unspent Transaction Outputs).
 
@@ -249,9 +249,9 @@ class BEAMWalletAPI:
             }
         }
 
-        if asset_id is not None:
+        if filter is not None:
             params['assets'] = True
-            params["filter"] = {"asset_id": int(asset_id)}
+            params["filter"] = filter
 
 
         return self._post("get_utxo", params)

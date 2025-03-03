@@ -50,7 +50,7 @@ templates.env.filters["datetimeformat"] = datetimeformat
 async def dashboard(request: Request, credentials: HTTPBasicCredentials = Depends(verify_credentials)):
     """Admin dashboard showing transaction summaries."""
     total_deposits = await db.txs.count_documents({"status": 3})
-    pending_withdrawals = await db.txs.count_documents({"success": {"$ne": True}})
+    pending_withdrawals = await db.txs.count_documents({"success": {"$ne": True}, "status": {"$ne": 4}})
     total_users = await db.addresses.count_documents({})
     assets = await db.assets.find().to_list(None)
 

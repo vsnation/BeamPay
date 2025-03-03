@@ -89,7 +89,7 @@
             <p>{{ pending_withdrawals }}</p>
         </div>
         <div class="stat-box">
-            <h3>Total Users</h3>
+            <h3>Total Addresses</h3>
             <p>{{ total_users }}</p>
         </div>
     </div>
@@ -112,10 +112,16 @@
                     {% set asset_data = assets | selectattr("_id", "equalto", asset.asset_id) | first %}
                     {{ asset_data.meta.N if asset_data else "Unknown Asset" }} ({{ asset.asset_id }})
                 </td>
-                <td>{{ asset.api_available | int / (10 ** (asset_data.decimals if asset_data else 8)) }} {{ asset_data.meta.UN if asset_data else "" }}</td>
-                <td>{{ asset.db_available | int / (10 ** (asset_data.decimals if asset_data else 8)) }} {{ asset_data.meta.UN if asset_data else "" }}</td>
+                <td>
+			{{ asset.api_available | int / (10 ** (asset_data.decimals if asset_data else 8)) }} {{ asset_data.meta.UN if asset_data else "" }}
+			{% if (asset.api_locked | int) >= 0 %} + {{ asset.api_locked| int / (10 ** (asset_data.decimals if asset_data else 8)) }} {{ asset_data.meta.UN if asset_data else "" }} {% endif %}
+		</td>
+                <td>
+			{{ asset.db_available | int / (10 ** (asset_data.decimals if asset_data else 8)) }} {{ asset_data.meta.UN if asset_data else "" }}
+			{% if (asset.db_locked | int) >= 0 %} + {{ asset.db_locked | int / (10 ** (asset_data.decimals if asset_data else 8)) }} {{ asset_data.meta.UN if asset_data else "" }} {% endif %}
+		</td>
                 <td class="{% if asset.api_available != asset.db_available %}error{% else %}success{% endif %}">
-                    {% if asset.api_available == asset.db_available %}
+                    {% if (asset.api_available | int + asset.api_locked | int) == (asset.db_available |int + asset.db_locked | int) %}
                         ✅ Matched
                     {% else %}
                         ❌ Mismatch (Diff: {{ (asset.api_available - asset.db_available) | int / (10 ** (asset_data.decimals if asset_data else 8)) }})
@@ -146,7 +152,7 @@
             <tr>
                 <td>{{ tx._id }}</td>
                 <td>
-                    {% set asset_data = assets | selectattr("_id", "equalto", tx.asset_id) | first %}
+                    {% set asset_data = assets | selectattr("asset_id", "equalto", tx.asset_id) | first %}
                     {{ tx.value | int / (10 ** (asset_data.decimals if asset_data else 8)) }} {{ asset_data.meta.UN if asset_data else "" }}
                 </td>
                 <td>
