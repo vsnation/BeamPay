@@ -3,8 +3,16 @@ import asyncio
 from db import db
 from config import BEAMPAY_WEBHOOK_URLS
 
-CONFIRMATIONS_REQUIRED = 80
+CONFIRMATIONS_REQUIRED = 1
 MAX_RETRIES = 5  # Retry up to 5 times
+
+# Load assets globally at startup
+ASSETS = {}
+
+async def load_assets():
+    """Load asset metadata from the database."""
+    global ASSETS
+    ASSETS = {str(asset["_id"]): asset.get("meta", {}).get("UN", f"Asset {asset['_id']}") for asset in (await db.assets.find().to_list(None))}
 
 
 async def notify_telegram(event_type, data):
@@ -61,8 +69,20 @@ async def dispatch_webhook(event_type, data):
 
 async def monitor_transactions():
     """Monitor transactions and trigger appropriate webhooks."""
+    await load_assets()
     while True:
-        transactions = await db.txs.find({"success": True}).to_list(None)
+        transactions = await db.txs.find({
+            "$or": [
+                {"status": {"$in": [0, 1, 5]}},
+                {"status": 3, "$or": [
+                    {"income": True, "webhook_sent.deposit_confirmed": {"$ne": True}},
+                    {"income": False, "webhook_sent.withdraw_confirmed": {"$ne": True}}
+                ]},
+                {"status": 4, "webhook_sent.failed": {"$ne": True}},
+                {"status": 2, "webhook_sent.cancelled": {"$ne": True}}
+            ]
+        }).to_list(None)
+        print(f"Found {len(transactions)} Pending Webhooks")
         for tx in transactions:
             tx_id = tx["_id"]
             asset_id = tx["asset_id"]
@@ -70,30 +90,50 @@ async def monitor_transactions():
             status = tx["status"]
             confirmations = tx["confirmations"]
             webhook_sent = tx.get("webhook_sent", {})
+            comment = tx.get("comment", "")
+            kernel = tx.get("kernel", "")
+            
+            if webhook_sent == None:
+                webhook_sent = {}
 
+            print(confirmations, status,  tx.get("income"), webhook_sent)
+
+            # Get human-readable asset name
+            asset_name = ASSETS.get(str(asset_id), f"??? {asset_id}")
+
+            # Format value
+            value_formatted = f"{int(value) / 10**8:,.8f}"  # Assuming 8 decimal places
+
+            sender_user = await db.users.find_one({"wallet_addresses": {"$in": [tx.get("sender")]}})
+            receiver_user = await db.users.find_one({"wallet_addresses": {"$in": [tx.get("receiver")]}})
             # Identify and dispatch missing webhooks
-            if status in [0,1] and tx.get("income") and not webhook_sent.get("deposit_pending"):
-                await dispatch_webhook("deposit_pending", {"txId": tx_id, "amount": value, "asset_id": asset_id, "address": tx['receiver']})
+            if status in [0,1, 5] and receiver_user and not webhook_sent.get("deposit_pending"):
+                print(tx, webhook_sent)
+                await dispatch_webhook("deposit_pending", {"txId": tx_id, "amount": value, "value_formatted": value_formatted,  "asset_id": asset_id, "asset_name": asset_name, "address": tx['receiver'], "comment": comment, "kernel": kernel})
                 webhook_sent["deposit_pending"] = True
 
-            elif status == 3 and tx.get("income") and confirmations >= CONFIRMATIONS_REQUIRED and not webhook_sent.get("deposit_confirmed"):
-                await dispatch_webhook("deposit_confirmed", {"txId": tx_id, "amount": value, "asset_id": asset_id, "address": tx['receiver']})
+            elif status == 3 and receiver_user and confirmations >= CONFIRMATIONS_REQUIRED and not webhook_sent.get("deposit_confirmed"):
+                print(tx, webhook_sent)
+                await dispatch_webhook("deposit_confirmed", {"txId": tx_id, "amount": value, "value_formatted": value_formatted,  "asset_id": asset_id, "asset_name": asset_name, "address": tx['receiver'], "comment": comment, "kernel": kernel})
                 webhook_sent["deposit_confirmed"] = True
 
-            elif status in [0,1] and not tx.get("income") and not webhook_sent.get("withdraw_pending"):
-                await dispatch_webhook("withdraw_pending", {"txId": tx_id, "amount": value, "asset_id": asset_id, "address": tx['sender']})
+            if status in [0,1] and sender_user and not webhook_sent.get("withdraw_pending"):
+                print(tx, webhook_sent)
+                await dispatch_webhook("withdraw_pending", {"txId": tx_id, "amount": value, "value_formatted": value_formatted,  "asset_id": asset_id, "asset_name": asset_name, "address": tx['sender'], "comment": comment, "kernel": kernel})
                 webhook_sent["withdraw_pending"] = True
 
-            elif status == 3 and not tx.get("income") and not webhook_sent.get("withdraw_confirmed"):
-                await dispatch_webhook("withdraw_confirmed", {"txId": tx_id, "amount": value, "asset_id": asset_id, "address": tx['sender']})
+            elif status == 3 and sender_user and not webhook_sent.get("withdraw_confirmed"):
+                print(tx, webhook_sent)
+                await dispatch_webhook("withdraw_confirmed", {"txId": tx_id, "amount": value, "value_formatted": value_formatted,  "asset_id": asset_id, "asset_name": asset_name, "address": tx['sender'], "comment": comment, "kernel": kernel})
                 webhook_sent["withdraw_confirmed"] = True
 
             elif status == 4 and not webhook_sent.get("failed"):
-                await dispatch_webhook("failed", {"txId": tx_id, "amount": value, "asset_id": asset_id, "reason": tx.get("failure_reason", "Unknown Error"), "address": tx['sender']})
+                print(tx)
+                await dispatch_webhook("failed", {"txId": tx_id, "amount": value, "value_formatted": value_formatted,  "asset_id": asset_id, "asset_name": asset_name, "reason": tx.get("failure_reason", "Unknown Error"), "address": tx['sender']})
                 webhook_sent["failed"] = True
 
             elif status == 2 and not webhook_sent.get("cancelled"):
-                await dispatch_webhook("cancelled", {"txId": tx_id, "amount": value, "asset_id": asset_id, "address": tx['sender']})
+                await dispatch_webhook("cancelled", {"txId": tx_id, "amount": value, "value_formatted": value_formatted,  "asset_id": asset_id, "asset_name": asset_name, "address": tx['sender']})
                 webhook_sent["cancelled"] = True
 
             # Update transaction webhook history
