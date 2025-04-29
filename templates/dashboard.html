@@ -109,7 +109,7 @@
             {% for asset in balance_comparison %}
             <tr>
                 <td>
-                    {% set asset_data = assets | selectattr("_id", "equalto", asset.asset_id) | first %}
+                    {% set asset_data = assets | selectattr("asset_id", "equalto", (asset.asset_id | int)) | first %}
                     {{ asset_data.meta.N if asset_data else "Unknown Asset" }} ({{ asset.asset_id }})
                 </td>
                 <td>
