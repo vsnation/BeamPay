@@ -8,7 +8,7 @@ import traceback
 from lib.beam import BEAMWalletAPI
 from db import db
 from config import BEAM_API_RPC, send_to_logs, CONFIRMATION_THRESHOLD
-from config import VERIFIED_CA, DEX_CONTRACT_ID
+from config import VERIFIED_CA, SPAM_CA, DEX_CONTRACT_ID
 import aiohttp
 
 
@@ -138,8 +138,23 @@ async def process_transactions():
                         "failure_reason": tx.get("failure_reason", ""),
                         "rates": tx.get("rates", []),
                         "success": False,  # Initial state. If fully checked.
+                        "webhook_sent": {}
                     }
                     await db.txs.insert_one(tx_data)
+
+                    # Get human-readable asset name
+                    try:
+                        if tx.get('income', None):
+                            asset_name = ASSETS.get(asset_id, f"??? {asset_id}")
+
+                            # Format value
+                            value_formatted = f"{int(value) / 10**8:,.8f}"  # Assuming 8 decimal places
+                            #await send_to_logs(
+                            #    f"⏳ *Deposit Pending*\n💰 *Amount*: `{value_formatted} {asset_name}`\n📥 *To*: `{tx['receiver']}`\n🔗 *Tx*: `{tx_id}`",
+                            #    parse_mode="Markdown"
+                            #)
+                    except Exception as exc:
+                        print(exc)
 
                     # Update locked balance
                     await handle_locked_balance(tx)
@@ -242,6 +257,7 @@ async def handle_finalized_transaction(tx):
 async def handle_failed_transaction(tx):
     """Mark withdrawal as failed & allow reprocessing without modifying balances."""
     sender = tx["sender"]
+    receiver = tx["receiver"]
     asset_id = str(tx["asset_id"])
     value = int(tx["value"])
     fee = int(tx.get("fee", 0))
@@ -249,20 +265,46 @@ async def handle_failed_transaction(tx):
 
     # Check if TX exists in pending_withdrawals
     pending_tx = await db.pending_withdrawals.find_one({"txId": tx_id})
-    
     if pending_tx:
         # Mark withdrawal as "pending" (allow send it again)
         await db.pending_withdrawals.update_one(
             {"txId": tx_id},
-            {"$set": {"status": "pending"}}
+            {"$set": {"status": "failed"}}
+        )
+        await db.txs.update_one(
+            {"_id": tx_id},
+            {"$set": {"success": True}}
         )
         await send_to_logs(
             f"❌ *Withdrawal Failed*\n"
             f"🔗 *From:* `{sender}` ➡ *To:* `{receiver}`\n"
-            f"💰 *Amount:* `{amount / 10**8:,.8f} {ASSETS.get(str(asset_id), '???')}`\n"
-            f"🆔 *Pending TX:* `{tx['_id']}`",
+            f"💰 *Amount:* `{value/ 10**8:,.8f} {ASSETS.get(str(asset_id), '???')}`\n"
+            f"🆔 *Pending TX:* `{tx_id}`",
             parse_mode="Markdown"
         )
+        sender_exists = await db.addresses.find_one({"_id": sender})
+        if sender_exists:
+            # Refund locked funds and BEAM fee back to sender
+            await update_balance(sender, asset_id, available_delta=value, locked_delta=-value)
+            await update_balance(sender, "0", available_delta=fee, locked_delta=-fee)  # Refund BEAM fee
+        return
+
+    receiver_exists = await db.addresses.find_one({"_id": receiver})
+    if receiver_exists:
+        await update_balance(receiver, asset_id, locked_delta=-value)
+        await send_to_logs(
+            f"❌ *DEPOSIT Failed*\n"
+            f"🔗 *From:* `{sender}` ➡ *To:* `{receiver}`\n"
+            f"💰 *Amount:* `{value / 10**8:,.8f} {ASSETS.get(str(asset_id), '???')}`\n"
+            f"🆔 *Pending TX:* `{tx_id}`",
+            parse_mode="Markdown"
+        )
+        await db.txs.update_one(
+            {"_id": tx_id},
+            {"$set": {"success": True}}
+        )
+
+
     
 
 
@@ -394,8 +436,8 @@ async def verify_balances():
 
         for asset in wallet_status["totals"]:
             asset_id = str(asset["asset_id"])  # Convert to string for consistency
-            available = int(asset["available"])
-            locked = int(asset["locked"])
+            available = int(asset["available_str"])
+            locked = int(asset["locked_str"])
             api_balances[asset_id] = {"available": available, "locked": locked}
 
         # Fetch balances from the database
@@ -527,7 +569,8 @@ async def process_assets(assets, is_dex=False):
                 pass  # Keep default
 
         # Check if asset is verified
-        is_verified = asset_id in VERIFIED_CA if VERIFIED_CA else False
+        is_verified = int(asset_id) in VERIFIED_CA if VERIFIED_CA else False
+        is_spam = int(asset_id) in SPAM_CA if SPAM_CA else False
 
         # Prepare asset data
         asset_data = {
@@ -535,7 +578,7 @@ async def process_assets(assets, is_dex=False):
             "metadata": metadata, "meta": meta,
             "confirmations": asset.get("confirmations", 0), "height": asset.get("height", 0),
             "issue_height": asset.get("issue_height", 0), "owner_id": asset.get("owner_id", ""),
-            "is_verified": is_verified
+            "is_verified": is_verified, "is_spam": is_spam
         }
 
         # Update or insert asset into the database
@@ -643,6 +686,7 @@ async def process_withdrawal_queue():
             amount = int(tx["value"])
             fee = int(tx["fee"])
             receiver = tx["receiver"]
+            comment = tx.get('comment', "")
 
             # TUDO Double check SENDER's address balance and math.
             sender_data = await db.addresses.find_one({"_id": sender})
@@ -655,10 +699,24 @@ async def process_withdrawal_queue():
 
             # Validate Locked Balance Matches Pending Withdrawals
             pending_withdrawals = await db.pending_withdrawals.find({"sender": sender, "status": {"$ne": "sent_confirmed"}}).to_list(None)
-            pending_total = sum(int(t["value"]) + int(t['fee']) if t['asset_id'] == 0 else int(t["value"]) for t in pending_withdrawals if t["asset_id"] == asset_id)
-            print(pending_total, locked_balance)
+            pending_total = 0
+            pending_beam_fees = 0  # Separate BEAM fee total
+            total_pending_beam = 0
             
-            if locked_balance != pending_total:
+            for t in pending_withdrawals:
+                if int(t["asset_id"]) == 0:  # If BEAM Withdrawal
+                    total_pending_beam += int(t["value"]) + int(t["fee"])  # Value + Fee
+                elif t["asset_id"] == asset_id:  # If CA Withdrawal
+                    pending_total += int(t["value"])  # Only Asset Value
+                    pending_beam_fees += int(t["fee"])  # Count BEAM fee separately
+                else:
+                    pending_beam_fees += int(t["fee"])  # Count BEAM fee separately
+                    continue
+
+            total_pending_beam = total_pending_beam + pending_beam_fees
+            pending_total  = total_pending_beam if asset_id == 0 else pending_total
+            
+            if locked_beam != total_pending_beam or locked_balance != pending_total:
                 await db.pending_withdrawals.update_one(
                     {"_id": tx["_id"]},
                     {"$set": {"status": "admin_check"}}
@@ -668,6 +726,8 @@ async def process_withdrawal_queue():
                     f"📤 *Sender:* `{sender}`\n"
                     f"🔒 *Locked Balance:* `{locked_balance / 10**8:,.8f} {ASSETS.get(str(asset_id), 'Unknown Asset')}`\n"
                     f"⏳ *Pending Withdrawals:* `{pending_total / 10**8:,.8f} {ASSETS.get(str(asset_id), 'Unknown Asset')}`\n"
+                    f"🔒 *Locked BEAM:* `{locked_beam / 10**8:,.8f} {ASSETS.get(str(0), 'Unknown Asset')}`\n"
+                    f"⏳ *Pending Withdrawals BEAM:* `{total_pending_beam / 10**8:,.8f} {ASSETS.get(str(0), 'Unknown Asset')}`\n"
                     f"🆔 *TxID:* `{tx['_id']}`",
                     parse_mode="Markdown"
                 )
@@ -678,7 +738,6 @@ async def process_withdrawal_queue():
             utxos = beam_api.get_utxo(count=100, sort_field="status", sort_direction="asc", filter={"asset_id": int(asset_id)})
             available_utxo_amount = sum(utxo["amount"] for utxo in utxos if utxo["status"] == 1)  # Only 'available' UTXOs
 
-            print(utxos)
             print("AVAILABLE UTXOs", available_utxo_amount)
             print(f"REQUIRED AMOUNT {amount}\t\t Asset ID: {asset_id}")
             print(f"FEE {fee}\t\t Asset ID: 0")
@@ -693,6 +752,8 @@ async def process_withdrawal_queue():
                 {"_id": tx["_id"]},
                 {"$set": {"status": "processing"}}
             )
+            print(f"🚀 Sending {amount/1e8:.8f} of Asset {asset_id} from {sender[:6]}... to {receiver[:6]}... | Comment: '{comment}'")
+            print(f"AVAILABLE UTXOs: {available_utxo_amount/1e8:.8f} aid: {asset_id} | REQUIRED: {(amount + fee)/1e8:.8f} {asset_id} | Asset ID: {asset_id} | Fee: {fee/1e8:.8f} {asset_id}")
 
             # 🔹 Send Withdrawal via BeamPay API
             response = beam_api.tx_send(
@@ -700,8 +761,10 @@ async def process_withdrawal_queue():
                 fee=fee,
                 sender=sender,
                 receiver=receiver,
-                asset_id=asset_id
+                asset_id=asset_id,
+                comment=comment,
             )
+
 
             # 🔹 If TX fails, revert status
             if not response or "error" in response:
@@ -731,6 +794,8 @@ async def process_withdrawal_queue():
                 "_id": tx_id,
                 "status": 0,  # Pending
                 "status_string": "pending",
+                "income": False,
+                "comment": comment,
                 "type": "withdrawal",
                 "asset_id": asset_id,
                 "value": str(amount),
@@ -740,6 +805,7 @@ async def process_withdrawal_queue():
                 "create_time": datetime.datetime.utcnow().timestamp(),
                 "confirmations": 0,
                 "success": False,
+                "webhook_sent": {}
             })
 
             await send_to_logs(
@@ -784,7 +850,7 @@ async def process_payments():
         print("Processing Onchain Transactions. 30 Sec.")
         await process_transactions()  # Function that processes txs
         await process_withdrawal_queue() # Function that processes mempool
-        await asyncio.sleep(15)  # Avoid hammering the system
+        await asyncio.sleep(5)  # Avoid hammering the system
 
 async def main():
     """Runs both daemons simultaneously."""
