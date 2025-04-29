@@ -21,7 +21,8 @@ BEAMPAY_WEBHOOK_URLS = json.loads(os.getenv("BEAMPAY_WEBHOOK_URLS"))
 
 # DEX
 DEX_CONTRACT_ID = os.getenv("DEX_CONTRACT_ID")
-VERIFIED_CA = os.getenv("VERIFIED_CA")
+VERIFIED_CA = json.loads(os.getenv("VERIFIED_CA"))
+SPAM_CA = json.loads(os.getenv("SPAM_CA"))
 
 TG_APP = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build() if TELEGRAM_BOT_TOKEN else None
 

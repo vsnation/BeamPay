@@ -1,8 +1,9 @@
 import os
+import traceback
 
 from auth import get_api_key
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
 from lib.beam import BEAMWalletAPI
@@ -54,7 +55,7 @@ async def dashboard(request: Request, credentials: HTTPBasicCredentials = Depend
     total_users = await db.addresses.count_documents({})
     assets = await db.assets.find().to_list(None)
 
-    addresses = await db.addresses.find().to_list(None)
+    addresses = await db.addresses.find().limit(10).to_list(None)
     transactions = await db.txs.find().sort("create_time", -1).limit(10).to_list(None)
 
     # Fetch the balance comparison data
@@ -101,8 +102,8 @@ async def balance_comparison():
         wallet_balances = {}
         for asset in wallet_status["totals"]:
             asset_id = str(asset["asset_id"])  # Convert to string for consistency
-            available = int(asset["available"])
-            locked = int(asset["locked"])
+            available = int(asset["available_str"])
+            locked = int(asset["locked_str"]) + int(asset['receiving_regular_str']) + int(asset['sending_regular_str'])
             wallet_balances[asset_id] = {"available": available, "locked": locked}
 
         # Fetch database balances

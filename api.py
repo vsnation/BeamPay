@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Body
+from fastapi import FastAPI, HTTPException, Depends, Body, Query
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.openapi.utils import get_openapi
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -82,6 +82,19 @@ async def create_wallet(note: str = Body(None), wallet_type: str = Body("regular
     await db.addresses.insert_one(address_data)
     return {"address": address, "note": note}
 
+@app.get("/wallet_status", dependencies=[Depends(get_api_key)])
+async def wallet_status():
+    wallet_status = beam_api.wallet_status()
+    print(wallet_status)
+    return {"status": True, "result": wallet_status}
+
+@app.get("/validate_address", dependencies=[Depends(get_api_key)])
+async def validate_address(address: str):
+    """Retrieve a list of addresses linked to a specific note."""
+    address = beam_api.validate_address(address)
+    print(address)
+    return {"status": True, "result": address['is_valid']}
+
 @app.get("/address", dependencies=[Depends(get_api_key)])
 async def get_address(note: str = Body(...)):
     """Retrieve a list of addresses linked to a specific note."""
@@ -106,12 +119,35 @@ async def withdraw(
     to_address: str = Body(...),
     asset_id: int = Body(...),
     amount: int = Body(...),
-    fee: int = Body(100000)
+    comment: str = Body(...),
+    fee: int = Body(None)
 ):
     """Validates and locks funds for withdrawal, actual transaction will be processed later."""
+    # 1. Validate Address
+    address_info = beam_api.validate_address(to_address)
+    print("IS VALID ADDRESS:", address_info)
+
+    if not address_info.get('is_valid'):
+        raise HTTPException(status_code=404, detail="Incorrect Withdrawal Address.")
 
     if to_address == from_address:
         raise HTTPException(status_code=404, detail="Sender can't send assets to itself")
+
+    # 2. Determine correct FEE
+    address_type = address_info.get('type', 'regular')
+    print(f"Address Type: {address_type}")
+
+    # Define fees
+    FEE_REGULAR = 100000      # 0.001 BEAM in Groths
+    FEE_OFFLINE = 1100000     # 0.011 BEAM in Groths
+
+    if address_type in ['regular', 'regular_new']:
+        tx_fee = FEE_REGULAR
+    else:  # offline, public_offline, max_privacy
+        tx_fee = FEE_OFFLINE
+
+    # 3. Override 'fee' parameter safely
+    fee = tx_fee
 
     # Fetch sender's balance from DB
     from_address_data = await db.addresses.find_one({"_id": from_address})
@@ -182,6 +218,7 @@ async def withdraw(
         "fee": str(fee),
         "sender": from_address,
         "receiver": to_address,
+        "comment": comment,
         "create_time": datetime.datetime.utcnow().timestamp(),
     }
 
@@ -214,16 +251,27 @@ async def get_balances(address: str):
     return address_data["balance"]
 
 @app.get("/transactions", dependencies=[Depends(get_api_key)])
-async def get_transactions(address: str = Body(None), status: int = Body(None), count: int = Body(10), skip: int = Body(0)):
-    """Retrieve transactions (optionally filtered by address or status)."""
+async def get_transactions(
+    address: str = Body(None),
+    status: int = Body(None),
+    count: int = Body(10, ge=1, le=100),  # Limits max results per query
+    skip: int = Body(0, ge=0)
+):
+    """Retrieve transactions, optionally filtered by address or status, sorted by newest first."""
+    print(address, status, count, skip)
+
     query = {}
     if address:
         query["$or"] = [{"sender": address}, {"receiver": address}]
     if status is not None:
         query["status"] = status
 
-    transactions = await db.txs.find(query).skip(skip).limit(count).to_list(None)
-    return transactions
+    # Count matching transactions
+    txs_count = await db.txs.count_documents(query)
+
+    # Retrieve transactions sorted by `create_time` DESCENDING (newest first)
+    transactions = await db.txs.find(query).sort("create_time", -1).skip(skip).limit(count).to_list(None)
+    return {"txs": transactions, "count": txs_count}
 
 @app.post("/register_webhook", dependencies=[Depends(get_api_key)])
 async def register_webhook(url: str = Body(...), event_type: str = Body(...), api_key: str = Depends(get_api_key)):

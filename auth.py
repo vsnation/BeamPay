@@ -7,7 +7,7 @@ API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
 # Simple rate limiter (5 requests per API key per second)
-RATE_LIMIT = 10
+RATE_LIMIT = 20
 rate_limits = {}
 
 async def get_api_key(api_key: str = Security(api_key_header)):
@@ -21,14 +21,14 @@ async def get_api_key(api_key: str = Security(api_key_header)):
 
     # Apply rate limiting
     now = time.time()
-    if api_key in rate_limits:
-        timestamps = rate_limits[api_key]
-        timestamps = [t for t in timestamps if now - t < 1]  # Keep only last second
-        if len(timestamps) >= RATE_LIMIT:
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
-        timestamps.append(now)
-        rate_limits[api_key] = timestamps
-    else:
-        rate_limits[api_key] = [now]
+    #if api_key in rate_limits:
+    #    timestamps = rate_limits[api_key]
+    #    timestamps = [t for t in timestamps if now - t < 1]  # Keep only last second
+    #    if len(timestamps) >= RATE_LIMIT:
+    #        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    #    timestamps.append(now)
+    #    rate_limits[api_key] = timestamps
+    #else:
+    #    rate_limits[api_key] = [now]
 
     return api_key
