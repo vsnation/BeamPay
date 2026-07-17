@@ -9,6 +9,7 @@ from db import db
 from config import BEAM_API_RPC, send_to_logs
 from auth import get_api_key
 import datetime
+from datetime import timezone
 
 import os
 
@@ -219,7 +220,7 @@ async def withdraw(
         "sender": from_address,
         "receiver": to_address,
         "comment": comment,
-        "create_time": datetime.datetime.utcnow().timestamp(),
+        "create_time": datetime.datetime.now(timezone.utc).timestamp(),
     }
 
     await db.pending_withdrawals.insert_one(withdrawal_request)
